@@ -1,5 +1,5 @@
 {
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ':!private' ':!data'",
+  "ignoreCommand": "git rev-parse --verify HEAD^ >/dev/null 2>&1 || exit 1; git diff --quiet HEAD^ HEAD -- ':!private' ':!data'",
   "crons": [
     {
       "path": "/api/cron/publish-scheduled-media",
