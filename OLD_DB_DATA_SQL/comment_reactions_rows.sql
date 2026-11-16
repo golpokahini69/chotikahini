@@ -1,0 +1,1 @@
+INSERT INTO public.comment_reactions (id, comment_id, user_id, emoji, created_at) VALUES ('bffcb6e0-6dae-4655-967c-94124321b8ec', 'cmt_8313e02c40bd', 'admin-1', 'love', '2026-11-05 22:56:09.974298+00');

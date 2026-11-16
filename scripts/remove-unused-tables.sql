@@ -1,0 +1,140 @@
+-- ============================================================================
+-- UNUSED TABLE CLEANUP
+-- ============================================================================
+--
+-- This file removes database objects that the application no longer uses, so
+-- leftover tables do not pile up in the database over time.
+--
+-- It is SEPARATE from setup.sql on purpose: setup.sql builds the schema,
+-- this file tears parts of it down. Run setup.sql first — never this file
+-- on its own.
+--
+-- ---------------------------------------------------------------------------
+-- BEFORE YOU RUN THIS
+-- ---------------------------------------------------------------------------
+-- 1. Take a backup. A DROP TABLE cannot be undone.
+--
+-- 2. Check that the object really is unused. Every statement below says
+--    which table it drops and why. To verify for yourself:
+--
+--        grep -rn "from(['\"]<table_name>['\"])" lib app components
+--
+--    A table with no hits there is not referenced by the app.
+--
+-- 3. Drop one statement at a time rather than the whole file at once, so
+--    you can see what each one does.
+--
+-- ---------------------------------------------------------------------------
+-- CURRENT STATE
+-- ---------------------------------------------------------------------------
+-- There are currently NO unused tables. Every table created by setup.sql is
+-- read or written by the application.
+--
+-- `post_reactions` used to be the only exception — it had a schema but no
+-- code behind it. It is now used by:
+--
+--     app/api/reactions/route.ts      → .from("post_reactions")
+--     components/PostReactions.tsx    → the story reaction bar
+--
+-- so it must NOT be dropped.
+--
+-- The statements below are the ones you are MOST LIKELY to need in future,
+-- kept here as a documented reference of what is safe to remove and what
+-- is not. Each is commented out — uncomment the ones you actually want.
+--
+-- ============================================================================
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- SAFE TO DROP — the legacy slug-keyed view counter.
+--
+-- `post_views` is keyed by post_slug. `post_view_counts` is the normalised
+-- replacement, keyed by post_metadata.id.
+--
+-- It is still READ as a fallback: lib/views.ts tries post_view_counts first
+-- and falls back to post_views for stories that have no post_metadata row.
+--
+-- DROP IT ONLY IF every published story has a post_metadata row. To check:
+--
+--     select count(*) from public.stories s
+--      where not exists (select 1 from public.post_metadata pm where pm.slug = s.slug);
+--
+-- If that returns 0, the fallback is never used and this is safe:
+--
+-- drop table if exists public.post_views cascade;
+-- ────────────────────────────────────────────────────────────────────────────
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- CAREFUL — the story-author application tables.
+--
+-- `author_applications` and `comment_reports` are both referenced by the
+-- app, so neither can be dropped. But `comment_reports` has no READ path:
+-- reports are written by app/api/comments/report/route.ts and nothing reads
+-- them back. The admin moderation panel reads the general `reports` table
+-- instead.
+--
+-- If you want to retire comment-specific reporting, delete the app route
+-- first, then:
+--
+-- drop table if exists public.comment_reports cascade;
+-- ────────────────────────────────────────────────────────────────────────────
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- CAREFUL — tables that hold real user data.
+--
+-- These are used by the app, but they are the tables you would empty if a
+-- feature were retired. Dropping them loses real rows, so only do it when
+-- you are deliberately wiping that feature's data.
+--
+--   reading_history    → app/api/user/reading-history
+--   bookmarks          → app/api/user/save-post
+--   user_follows       → app/api/follow
+--   page_visits        → app/api/analytics
+--   story_progress     → app/api/analytics/progress
+--   share_suggestion_log
+--   share_suggestion_daily
+--                         → app/api/admin/share-suggestions
+--
+-- drop table if exists public.reading_history cascade;
+-- drop table if exists public.bookmarks cascade;
+-- drop table if exists public.user_follows cascade;
+-- drop table if exists public.page_visits cascade;
+-- drop table if exists public.story_progress cascade;
+-- drop table if exists public.share_suggestion_log cascade;
+-- drop table if exists public.share_suggestion_daily cascade;
+-- ────────────────────────────────────────────────────────────────────────────
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- NEVER DROP — these break the app.
+--
+--   users                  → every FK in the schema points here
+--   stories                → the content itself
+--   post_metadata          → the story identity that comments/likes join on
+--   chat_messages          → the live group chat (also on realtime)
+--   site_settings          → site config, navigation, crawler schedule
+--   categories             → the category list
+--
+-- The `delete_old_group_messages()` function is also kept: it is not called
+-- from application code, but it is meant to be scheduled with pg_cron to
+-- clear old group-chat messages. Dropping it would remove that capability.
+--
+-- drop function if exists public.delete_old_group_messages();
+-- ────────────────────────────────────────────────────────────────────────────
+
+
+-- ============================================================================
+-- HOW TO ADD A NEW ENTRY
+-- ============================================================================
+--
+-- 1. Remove the code that touches the table (routes, components, lib).
+-- 2. Confirm nothing references it any more:
+--
+--        grep -rn "from(['\"]<table_name>['\"])" lib app components
+--
+-- 3. Add a DROP statement above, with the reason.
+--
+-- 4. Run it against the production database.
+-- ============================================================================

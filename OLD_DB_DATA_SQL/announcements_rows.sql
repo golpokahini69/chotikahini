@@ -1,0 +1,1 @@
+INSERT INTO public.announcements (id, text, active, color, link, created_by, updated_at) VALUES ('53313f21-cfa9-4f8c-8183-1bd137bf450b', 'নতুন ফিচারঃ এখন থেকে ইউজাররা সবাই পোস্ট করতে পারবেন।', true, 'red', '', null, '2026-09-04 05:53:22.663+00');

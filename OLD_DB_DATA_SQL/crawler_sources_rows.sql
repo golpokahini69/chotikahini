@@ -1,0 +1,1 @@
+INSERT INTO public.crawler_sources (id, url, category, default_tags, active, last_crawled_at, created_at, feed_url) VALUES ('b127dc63-4b63-4a05-9960-8c14f0d68122', 'https://bengalichotigolpo.com/', 'golpo', '', true, '2026-08-26 22:52:34.342+00', '2026-08-24 23:40:16.723873+00', null);

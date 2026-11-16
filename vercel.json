@@ -1,0 +1,9 @@
+{
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ':!private' ':!data'",
+  "crons": [
+    {
+      "path": "/api/cron/publish-scheduled-media",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+INSERT INTO public.verification_requests (id, user_id, reason, status, created_at) VALUES ('2e282554-759d-4804-8347-9a3c8dd3d9ec', 'admin-1', 'jhjh', 'approved', '2026-08-24 20:32:38.09327+00');
