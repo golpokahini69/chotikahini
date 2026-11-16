@@ -18,7 +18,7 @@ function revalidateStoryPaths(
   uid?: string | null,
   publicSlug?: string | null,
 ) {
-  revalidatePath("/");
+  revalidateStoryListingPaths();
   if (slug) revalidatePath(`/${slug}`);
   if (uid && uid !== slug) revalidatePath(`/${uid}`);
   // The new public route. Without this a published story's `/golpo/<slug>`
@@ -31,6 +31,23 @@ function revalidateStoryPaths(
   revalidatePath("/rss.xml");
   revalidatePath("/rss-pictures.xml");
   revalidatePath("/sitemap.xml");
+}
+
+/** Invalidate every public listing whose contents depend on published stories. */
+function revalidateStoryListingPaths() {
+  revalidatePath("/", "page");
+  revalidatePath("/page/[num]", "page");
+  revalidatePath("/posts", "page");
+  revalidatePath("/categories", "page");
+  revalidatePath("/categories/[category]", "page");
+  revalidatePath("/tags", "page");
+  revalidatePath("/tags/[tag]", "page");
+  revalidatePath("/archive", "page");
+  revalidatePath("/archive/[year]/[month]", "page");
+  revalidatePath("/authors", "page");
+  revalidatePath("/authors/[id]", "page");
+  revalidatePath("/series", "page");
+  revalidatePath("/featured", "page");
 }
 
 // Helper to send a notification to a single user.
@@ -204,7 +221,7 @@ export async function POST(req: Request) {
         if (bulkError) throw bulkError;
       }
       clearPostsCache();
-      revalidatePath("/");
+      revalidateStoryListingPaths();
       return NextResponse.json({ success: true, count: uids.length, message: `${uids.length}টি গল্পের ওপর ${bulkAction} অ্যাকশন সফল হয়েছে!` });
     }
 
