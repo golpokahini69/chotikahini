@@ -13,6 +13,23 @@ interface Props {
 export const revalidate = 3600;
 
 /**
+ * Empty by design — it is what registers this route for ISR.
+ *
+ * With `revalidate` but NO `generateStaticParams`, Next 16 leaves the route
+ * out of the prerender manifest's `dynamicRoutes`, silently ignoring the
+ * revalidate above: every request paid a full server render plus fresh
+ * database reads, and the build shipped it as plain `ƒ (Dynamic)` (verified
+ * in production: `x-vercel-cache: MISS` + `private, no-store`).
+ *
+ * `[]` means "prerender nothing, render on demand" — the on-demand render is
+ * then CACHED and reused for `revalidate` seconds instead. Unknown params
+ * still render because Next defaults `dynamicParams` to true.
+ */
+export function generateStaticParams(): { num: string }[] {
+  return [];
+}
+
+/**
  * Page 2+ of a tag-filtered gallery list.
  *
  * The tag stays in the URL on every page, so the filter survives

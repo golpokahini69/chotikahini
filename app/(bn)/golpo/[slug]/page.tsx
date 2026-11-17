@@ -20,6 +20,26 @@ import { getPartIndexes } from "@/lib/series-utils";
 export const revalidate = 86400;
 export const dynamicParams = true;
 
+/**
+ * Empty on purpose — this is what REGISTER the route for ISR.
+ *
+ * Without `generateStaticParams`, Next 16 does not list `/golpo/[slug]` in
+ * the prerender manifest's `dynamicRoutes`, and `revalidate` above is then
+ * silently ignored: the build ships it as plain `ƒ (Dynamic)` and every
+ * story view pays a full server render plus fresh database reads. Measured
+ * in production: `x-vercel-cache: MISS` + `private, no-store` on repeat
+ * requests to the same story, while `/categories` (which does export this)
+ * returned `PRERENDER`.
+ *
+ * Returning `[]` means "prerender nothing at build time, render on demand",
+ * and `dynamicParams = true` above still lets any slug render — only now the
+ * on-demand render is CACHED and reused for 86400s, and invalidated by the
+ * admin publish/edit paths.
+ */
+export function generateStaticParams(): { slug: string }[] {
+  return [];
+}
+
 export async function generateMetadata({
   params,
 }: {
