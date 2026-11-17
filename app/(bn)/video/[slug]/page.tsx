@@ -88,11 +88,7 @@ export default async function VideoPublicPage({ params }: VideoPageProps) {
       {/* Counts only after the player is on screen for 2s AND the viewer
           really engages with it (or the embed autoplays) — never on load.
           See components/VideoViewTracker.tsx for the full rule. */}
-      <VideoViewTracker
-        videoId={video.id}
-        targetId="video-player"
-        autoplay={/(\?|&)autoplay=1/.test(video.embed_url || "")}
-      />
+      <VideoViewTracker videoId={video.id} targetId="video-player" />
 
       <div className="container-page pt-4 sm:pt-6">
         <Link
@@ -138,6 +134,7 @@ export default async function VideoPublicPage({ params }: VideoPageProps) {
             </h1>
 
             <VideoDetailMeta
+              videoId={video.id}
               publishedAt={video.published_at}
               viewCount={viewCount}
               likeCount={likeCount}

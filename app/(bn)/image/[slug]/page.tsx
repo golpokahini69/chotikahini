@@ -17,6 +17,7 @@ import { isPictureSectionEnabled } from "@/lib/config";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { PictureGalleryViewer } from "@/components/PictureGalleryViewer";
 import { PictureViewTracker } from "@/components/PictureViewTracker";
+import { LiveViewCount } from "@/components/LiveViewCount";
 import { enToBnNumber, formatDateTime } from "@/lib/utils";
 
 interface PicturesPageProps {
@@ -132,17 +133,7 @@ export default async function PicturePublicPage({ params }: PicturesPageProps) {
                   {enToBnNumber(count)}টি ছবি
                 </span>
               ) : null}
-              {viewCount > 0 ? (
-                <>
-                  <span aria-hidden className="text-border/80">
-                    ·
-                  </span>
-                  <span className="inline-flex items-center gap-1 tabular-nums">
-                    <Eye className="h-3.5 w-3.5" />
-                    {enToBnNumber(viewCount)} ভিউ
-                  </span>
-                </>
-              ) : null}
+              <LiveViewCount storageKey={`picture:${picture.id}`} initial={viewCount} />
               {published ? (
                 <>
                   <span aria-hidden className="text-border/80">
