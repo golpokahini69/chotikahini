@@ -1,7 +1,7 @@
 "use client";
 
 import { getClientSiteName, getClientSiteUrl } from "@/lib/client-config";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -18,6 +18,7 @@ import { hasPermission as hasPerm } from "@/lib/permissions";
 import { getAllCategoryConfigs } from "@/lib/config";
 import { RoleGuide } from "./RoleGuide";
 import { AdminSidebar } from "./AdminSidebar";
+import { AdminPagination } from "./AdminPagination";
 import { SimilarityCheck } from "./SimilarityCheck";
 import { SimilarityClusters } from "./SimilarityClusters";
 import { CountdownTimer } from "@/components/CountdownTimer";
@@ -79,7 +80,7 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
     if (sec && ["dashboard", "review", "authors", "messages", "notifications", "verify", "deletions", "similarity"].includes(sec)) {
       setActiveSection(sec as any);
       if (sec === "messages") fetchContactMessages();
-      if (sec === "notifications") fetchAdminNotifications();
+      if (sec === "notifications") void ensureAdminNotifications();
       if (sec === "deletions") fetchDeletionRequests();
     }
   }, [searchParams]);
@@ -89,6 +90,19 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
   const [selectedContactMessage, setSelectedContactMessage] = useState<any | null>(null);
 
   const [adminNotifications, setAdminNotifications] = useState<any[]>([]);
+  // Two-tab notification center: "নতুন" shows only what the admin hasn't
+  // acted on; anything marked read drops into "পড়েছে". Both tabs are paged
+  // client-side (15 per page) so the 100-row API window stays readable.
+  const [notifTab, setNotifTab] = useState<"new" | "read">("new");
+  const [notifPage, setNotifPage] = useState(1);
+  const NOTIFS_PER_PAGE = 15;
+  // Unread count lives in its own state so the periodic badge refresh can ask
+  // the API for a COUNT ONLY instead of re-downloading the whole list.
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+  // Timestamp of the last successful FULL list load: reopening the section
+  // refetches only past this window, so switching tabs/sections never reloads
+  // the list again and again.
+  const notifFetchedAtRef = useRef(0);
   // Scope meta from the API: rows addressed to this admin that the role
   // allowlist filtered out — shown instead of silently disappearing.
   const [notifMeta, setNotifMeta] = useState<{ hiddenCount: number } | null>(null);
@@ -110,8 +124,11 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
       const res = await fetch("/api/admin/notifications");
       if (res.ok) {
         const json = await res.json();
-        setAdminNotifications(json.notifications || []);
+        const list: any[] = json.notifications || [];
+        setAdminNotifications(list);
+        setUnreadNotifCount(list.filter((n) => !n.isRead).length);
         setNotifMeta({ hiddenCount: json.hiddenCount || 0 });
+        notifFetchedAtRef.current = Date.now();
         notifRetryRef.fired = false;
       } else {
         const body = await res.text().catch(() => "");
@@ -133,6 +150,53 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
       }
     } finally {
       setLoadingAdminNotifications(false);
+    }
+  };
+
+  /** The list only refreshes past this window — see notifFetchedAtRef. */
+  const NOTIF_LIST_TTL_MS = 60_000;
+
+  /**
+   * Cheap badge refresh: ONE head-count on the server (`?count=1`), no rows,
+   * no user join. The 30s poll uses this instead of re-downloading the list.
+   */
+  const fetchUnreadNotificationCount = useCallback(async () => {
+    if (!hasPerm(user?.role, "notifications.view")) return;
+    try {
+      const res = await fetch("/api/admin/notifications?count=1");
+      if (!res.ok) return;
+      const json = await res.json();
+      if (typeof json.unreadCount === "number") setUnreadNotifCount(json.unreadCount);
+    } catch {
+      // Badge freshness is best-effort; the list itself is unaffected.
+    }
+  }, [user?.role]);
+
+  /**
+   * Load the notification LIST — at most once per minute. Every section
+   * switch used to re-download and re-render the whole list.
+   */
+  const ensureAdminNotifications = async (force = false) => {
+    const age = Date.now() - notifFetchedAtRef.current;
+    if (!force && notifFetchedAtRef.current > 0 && age < NOTIF_LIST_TTL_MS) return;
+    await fetchAdminNotifications();
+  };
+
+  /** Move one notification between the "নতুন" / "পড়েছে" tabs. */
+  const toggleAdminNotificationRead = async (ntf: any) => {
+    const nextRead = !ntf.isRead;
+    const next = adminNotifications.map((n) => (n.id === ntf.id ? { ...n, isRead: nextRead } : n));
+    setAdminNotifications(next);
+    setUnreadNotifCount(next.filter((n) => !n.isRead).length);
+    try {
+      const res = await fetch("/api/admin/notifications", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: ntf.id, isRead: nextRead }),
+      });
+      if (!res.ok) await fetchAdminNotifications();
+    } catch {
+      await fetchAdminNotifications();
     }
   };
 
@@ -195,6 +259,7 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
         return;
       }
       setAdminNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+      setUnreadNotifCount(0);
     } catch (e) {
       console.error("Failed to mark notifications read:", e);
     }
@@ -211,7 +276,9 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
         fetchAdminNotifications();
         return;
       }
+      const wasUnread = !adminNotifications.find((n) => n.id === id)?.isRead;
       setAdminNotifications((prev) => prev.filter((n) => n.id !== id));
+      if (wasUnread) setUnreadNotifCount((prev) => Math.max(0, prev - 1));
     } catch (e) {
       console.error("Failed to delete notification:", e);
     }
@@ -616,7 +683,7 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
     //     waiting for the next tick.
     let interval: number | undefined = window.setInterval(() => {
       if (document.hidden) return;
-      fetchAdminNotifications();
+      fetchUnreadNotificationCount();
       fetchWelcomeRecipients();
       fetchDeletionRequests();
       fetchContactMessages();
@@ -629,11 +696,12 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
         if (interval !== undefined) window.clearInterval(interval);
         interval = undefined;
       } else {
-        fetchAdminNotifications();
+        fetchUnreadNotificationCount();
+        void ensureAdminNotifications();
         if (interval === undefined) {
           interval = window.setInterval(() => {
             if (document.hidden) return;
-            fetchAdminNotifications();
+            fetchUnreadNotificationCount();
             fetchWelcomeRecipients();
             fetchDeletionRequests();
             fetchContactMessages();
@@ -942,12 +1010,12 @@ return (
         onSelectSection={(sec) => {
           setActiveSection(sec as any);
           if (sec === "messages") fetchContactMessages();
-          if (sec === "notifications") fetchAdminNotifications();
+          if (sec === "notifications") void ensureAdminNotifications();
           if (sec === "deletions") fetchDeletionRequests();
         }}
         badges={{
           pendingReviews: allStoriesQueue.filter((p) => p.status === "pending").length,
-          unreadNotifications: adminNotifications.filter((n) => !n.isRead).length,
+          unreadNotifications: unreadNotifCount,
           // Total in this admin's scope: the sidebar falls back to it when
           // nothing is unread, so "how many are there?" is always answerable
           // WITHOUT opening the section (the reported problem).
@@ -2010,12 +2078,36 @@ return (
               </div>
 
               <div className="bg-surface-alt rounded-2xl border border-border shadow-sm overflow-hidden divide-y divide-zinc-200 dark:divide-zinc-800">
-                {loadingAdminNotifications ? (
+                {loadingAdminNotifications && adminNotifications.length === 0 ? (
                   <div className="p-12 text-center text-sm text-fg-muted animate-pulse">নোটিফিকেশন লোড হচ্ছে...</div>
                 ) : adminNotifications.length === 0 ? (
-                  <div className="p-12 text-center text-sm text-fg-muted">কোনো নোটিফিকেশন পাওয়া যায়নি।</div>
+                  <div className="p-12 text-center text-sm text-fg-muted">কোনো নোটিফিকেশন পাওয়া যায়নি।</div>
                 ) : (
-                  adminNotifications.map((ntf) => (
+                  (() => {
+                    // Slice once per render for the ACTIVE TAB. The full list
+                    // stays in component state, so switching tabs or pages
+                    // never triggers another fetch.
+                    const tabItems = notifTab === "new"
+                      ? adminNotifications.filter((n) => !n.isRead)
+                      : adminNotifications.filter((n) => n.isRead);
+                    if (tabItems.length === 0) {
+                      return (
+                        <div className="p-12 text-center text-sm text-fg-muted">
+                          {notifTab === "new"
+                            ? "সবগুলো পড়া হয়ে গেছে — নতুন কোনো নোটিফিকেশন নেই।"
+                            : "এখনো কোনো নোটিফিকেশন পড়া হিসেবে চিহ্নিত হয়নি।"}
+                        </div>
+                      );
+                    }
+                    const totalPages = Math.max(1, Math.ceil(tabItems.length / NOTIFS_PER_PAGE));
+                    const currentPage = Math.min(notifPage, totalPages);
+                    const pageItems = tabItems.slice(
+                      (currentPage - 1) * NOTIFS_PER_PAGE,
+                      currentPage * NOTIFS_PER_PAGE,
+                    );
+                    return (
+                      <>
+                        {pageItems.map((ntf) => (
                     <div
                       key={ntf.id}
                       className={`p-4 sm:p-5 hover:bg-surface-hover transition-colors flex items-start justify-between gap-4 ${
@@ -2147,7 +2239,22 @@ return (
                         </button>
                       </div>
                     </div>
-                  ))
+                        ))}
+                        {totalPages > 1 ? (
+                          <div className="border-t border-border bg-surface-alt p-3">
+                            <AdminPagination
+                              page={currentPage}
+                              totalPages={totalPages}
+                              onPageChange={setNotifPage}
+                            />
+                            <p className="mt-1 text-center text-[11px] text-fg-subtle">
+                              পৃষ্ঠা {enToBnNumber(currentPage)} / {enToBnNumber(totalPages)} · মোট {enToBnNumber(tabItems.length)}টি
+                            </p>
+                          </div>
+                        ) : null}
+                      </>
+                    );
+                  })()
                 )}
               </div>
             </div>

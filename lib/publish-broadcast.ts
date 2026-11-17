@@ -88,18 +88,42 @@ async function createFeedPost(
     const supabase = getSupabaseAdmin();
     const safeTitle = (title || "").trim();
 
+    // Who is this content by? Stories show their author; media shows the
+    // uploading admin/uploader. Resolved here so the timeline post reads like
+    // a real announcement ("… — লেখক: X") instead of an anonymous link.
+    let byline = "";
+    if (kind === "story") {
+      const { data } = await supabase
+        .from("stories")
+        .select("author_id")
+        .eq("uid", id)
+        .maybeSingle();
+      const authorId = (data as { author_id?: string } | null)?.author_id;
+      if (authorId) {
+        const { data: author } = await supabase
+          .from("users")
+          .select("name, username")
+          .eq("id", authorId)
+          .maybeSingle();
+        const name =
+          (author as { name?: string } | null)?.name ||
+          (author as { username?: string } | null)?.username;
+        if (name) byline = `\nলেখক: ${name}`;
+      }
+    }
+
     const content =
       kind === "story"
         ? safeTitle
-          ? `নতুন গল্প প্রকাশ হয়েছে — "${safeTitle}"`
-          : "নতুন গল্প প্রকাশ হয়েছে"
+          ? `নতুন গল্প প্রকাশ হয়েছে — "${safeTitle}"${byline}`
+          : `নতুন গল্প প্রকাশ হয়েছে${byline}`
         : kind === "video"
           ? safeTitle
-            ? `নতুন ভিডিও এসেছে — "${safeTitle}"\n${href}`
-            : `নতুন ভিডিও প্রকাশিত হয়েছে\n${href}`
+            ? `নতুন ভিডিও এসেছে — "${safeTitle}"${byline}\n${href}`
+            : `নতুন ভিডিও প্রকাশিত হয়েছে${byline}\n${href}`
           : safeTitle
-            ? `নতুন ছবির গ্যালারি — "${safeTitle}"\n${href}`
-            : `নতুন গ্যালারি প্রকাশিত হয়েছে\n${href}`;
+            ? `নতুন ছবির গ্যালারি — "${safeTitle}"${byline}\n${href}`
+            : `নতুন গ্যালারি প্রকাশিত হয়েছে${byline}\n${href}`;
 
     const payload: Record<string, unknown> = {
       user_id: posterId,

@@ -51,11 +51,111 @@ async function findPublicSlug(
   }
 }
 
-/** Marker identity for system rows — never a real user id. */
-const SYSTEM_USER_ID = null;
+/** Marker identity for system rows — `role`/`is_system` carry the identity. */
+const SYSTEM_NAME = "সিস্টেম";
+const SYSTEM_USERNAME = "system";
+
+/**
+ * Real sender id for system rows.
+ *
+ * `chat_messages.user_id` is `text NOT NULL REFERENCES users(id)` on the live
+ * database (see scripts/newage-full-setup.sql §9) — an insert with a null
+ * user_id is rejected with 23502, which is exactly why no system message had
+ * EVER been delivered: every announcement failed silently. System rows now
+ * borrow the site's oldest superadmin/admin account as the FK target; the UI
+ * still renders them as the centered "সিস্টেম" pill because it keys off
+ * `is_system`, not the sender.
+ *
+ * Memoised for 10 minutes — one tiny read per process, not per announcement.
+ */
+let systemSender: { id: string; at: number } | null = null;
+
+async function resolveSystemSenderId(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+): Promise<string | null> {
+  if (systemSender && Date.now() - systemSender.at < 10 * 60 * 1000) {
+    return systemSender.id;
+  }
+  try {
+    const { data, error } = await supabase
+      .from("users")
+      .select("id")
+      .in("role", ["superadmin", "admin"])
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (error) return null;
+    const id = (data as { id?: string } | null)?.id || null;
+    if (id) systemSender = { id, at: Date.now() };
+    return id;
+  } catch {
+    return null;
+  }
+}
 
 /** The three publishable content kinds that get broadcasts. */
 export type PublishKind = "story" | "video" | "picture";
+
+/**
+ * Resolve the display name of the account that published the content, so the
+ * announcement can say WHO published it (admins publish on authors' behalf,
+ * and for stories the story's own author is the meaningful name).
+ */
+async function resolvePublisherName(
+  kind: PublishKind,
+  id: string,
+): Promise<string | null> {
+  const raw = (id || "").trim().replace(/^\/+/, "");
+  if (!raw) return null;
+  try {
+    const supabase = getSupabaseAdmin();
+
+    if (kind === "story") {
+      const { data } = await supabase
+        .from("stories")
+        .select("author_id")
+        .eq("uid", raw)
+        .maybeSingle();
+      const authorId = (data as { author_id?: string } | null)?.author_id;
+      if (!authorId) return null;
+      const { data: author } = await supabase
+        .from("users")
+        .select("name, username")
+        .eq("id", authorId)
+        .maybeSingle();
+      return (
+        (author as { name?: string; username?: string } | null)?.name ||
+        (author as { username?: string } | null)?.username ||
+        null
+      );
+    }
+
+    // Media rows keep the uploading admin on `created_by`.
+    const table = kind === "video" ? "video_posts" : "picture_galleries";
+    const { data: row } = await supabase
+      .from(table)
+      .select("created_by, uploader_name")
+      .eq("id", raw)
+      .maybeSingle();
+    const creatorId = (row as { created_by?: string | null } | null)?.created_by;
+    const uploader = (row as { uploader_name?: string | null } | null)?.uploader_name;
+
+    if (creatorId) {
+      const { data: creator } = await supabase
+        .from("users")
+        .select("name, username")
+        .eq("id", creatorId)
+        .maybeSingle();
+      const name =
+        (creator as { name?: string } | null)?.name ||
+        (creator as { username?: string } | null)?.username;
+      if (name) return name;
+    }
+    return uploader || null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Canonical absolute URL for freshly published content.
@@ -107,12 +207,23 @@ export async function postSystemChat(text: string): Promise<boolean> {
   if (!trimmed) return false;
 
   try {
-    const { error } = await getSupabaseAdmin()
+    const supabase = getSupabaseAdmin();
+
+    // The FK on chat_messages.user_id is NOT NULL, so a null sender can never
+    // be inserted (23502 — the original, silent failure mode). Borrow the
+    // oldest admin account; the row still renders as the system pill.
+    const senderId = await resolveSystemSenderId(supabase);
+    if (!senderId) {
+      console.warn("[chat-system] no admin account available to attribute the announcement");
+      return false;
+    }
+
+    const { error } = await supabase
       .from("chat_messages")
       .insert({
-        user_id: SYSTEM_USER_ID,
-        username: "system",
-        name: "সিস্টেম",
+        user_id: senderId,
+        username: SYSTEM_USERNAME,
+        name: SYSTEM_NAME,
         profile_pic: null,
         message: trimmed,
         role: "system",
@@ -141,12 +252,28 @@ export async function postSystemChat(text: string): Promise<boolean> {
  * server-context, in which case the caller falls back to a relative link.
  */
 function siteOrigin(): string {
-  try {
-    const site = getSiteConfig();
-    return (site.url || "").replace(/\/+$/, "");
-  } catch {
-    return "";
+  // Preference order matters: a stale DB-stored site config (one publish
+  // produced `http://localhost:3000/video/...` in the global feed because
+  // that is what the saved config held) must never leak into public links.
+  const candidates = [
+    process.env.NEXT_PUBLIC_SITE_URL,
+    (() => {
+      try {
+        return getSiteConfig().url;
+      } catch {
+        return "";
+      }
+    })(),
+  ];
+
+  for (const raw of candidates) {
+    const origin = (raw || "").trim().replace(/\/+$/, "");
+    if (!origin) continue;
+    if (/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?/i.test(origin)) continue;
+    if (!/^https?:\/\//i.test(origin)) continue;
+    return origin;
   }
+  return "";
 }
 
 /**
@@ -166,9 +293,11 @@ export async function announceVideoPublished(
   if (!href) return false;
 
   const safeTitle = (title || "").trim();
+  const publisher = await resolvePublisherName("video", id);
   const headline = safeTitle ? `নতুন ভিডিও: ${safeTitle}` : "নতুন ভিডিও প্রকাশিত হয়েছে";
+  const by = publisher ? `\nপ্রকাশক: ${publisher}` : "";
 
-  return postSystemChat(`${headline}\n${href}`);
+  return postSystemChat(`${headline}${by}\n${href}`);
 }
 
 /**
@@ -190,11 +319,13 @@ export async function announcePicturePublished(
   if (!href) return false;
 
   const safeTitle = (title || "").trim();
+  const publisher = await resolvePublisherName("picture", id);
   const headline = safeTitle
     ? `নতুন ছবির গ্যালারি: ${safeTitle}`
     : "নতুন গ্যালারি প্রকাশিত হয়েছে";
+  const by = publisher ? `\nপ্রকাশক: ${publisher}` : "";
 
-  return postSystemChat(`${headline}\n${href}`);
+  return postSystemChat(`${headline}${by}\n${href}`);
 }
 
 /**
@@ -213,10 +344,12 @@ export async function announceStoryPublished(
   if (!href) return false;
 
   const safeTitle = (title || "").trim();
+  const publisher = await resolvePublisherName("story", storyPath);
   const headline = safeTitle
     ? `নতুন গল্প প্রকাশিত হয়েছে: "${safeTitle}"`
     : "নতুন গল্প প্রকাশিত হয়েছে";
+  const by = publisher ? `\nলেখক: ${publisher}` : "";
 
-  return postSystemChat(`${headline}\nপড়তে ভিজিট করুন: ${href}`);
+  return postSystemChat(`${headline}${by}\nপড়তে ভিজিট করুন: ${href}`);
 }
 

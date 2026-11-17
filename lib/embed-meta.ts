@@ -25,6 +25,8 @@ export type EmbedProvider =
   | "vimeo"
   | "twitter"
   | "dailymotion"
+  /** One of OUR OWN published videos (`/video/<slug>`, `/videos/<id>`). */
+  | "own"
   | "generic";
 
 export interface EmbedMeta {

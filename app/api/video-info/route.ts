@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { deriveEmbedFromUrl, EmbedMeta } from "@/lib/embed-meta";
 import { isBotRequest } from "@/lib/bot-guard";
+import { getSupabaseAdmin } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -100,6 +101,53 @@ async function tryOEmbed(
   }
 }
 
+/**
+ * Resolve one of OUR OWN video URLs (`/video/<public-slug>` or
+ * `/videos/<id>`) straight from the database.
+ *
+ * This is what makes published videos PLAYABLE inside the global chat: the
+ * announcement links to our own page, which no third-party provider
+ * recognises, so without this branch the message only produced a plain link
+ * card. Returning the stored `embed_url`/thumbnail here lets `VideoEmbedCard`
+ * render the real player inline.
+ */
+async function resolveOwnVideo(
+  raw: string,
+): Promise<EmbedMeta | null> {
+  try {
+    const u = new URL(raw);
+    const path = u.pathname;
+    const slug = path.match(/^\/video\/([a-z0-9][a-z0-9-]{0,80})\/?$/i)?.[1];
+    const id = path.match(/^\/videos\/([0-9a-f-]{8,})\/?$/i)?.[1];
+    if (!slug && !id) return null;
+
+    const supabase = getSupabaseAdmin();
+    let query = supabase
+      .from("video_posts")
+      .select("id, title, embed_url, thumbnail_url, uploader_name, public_slug, status")
+      .neq("status", "deleted")
+      .limit(1);
+    query = slug ? query.eq("public_slug", slug) : query.eq("id", id);
+
+    const { data, error } = await query.maybeSingle();
+    if (error || !data) return null;
+    if (!data.embed_url) return null;
+
+    return {
+      provider: "own",
+      url: raw,
+      embedUrl: data.embed_url,
+      title: data.title || null,
+      author: data.uploader_name || null,
+      description: null,
+      thumbnail: data.thumbnail_url || null,
+      siteName: "চটি কাহিনী",
+    } as EmbedMeta;
+  } catch {
+    return null;
+  }
+}
+
 export async function GET(req: Request) {
   // Fetches a remote page for video metadata — reject obvious scrapers
   // before that work starts. Legitimate crawlers are allowed through.
@@ -127,7 +175,14 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "blocked host" }, { status: 400 });
   }
 
-  // 1. Derive everything we can from the URL alone.
+  // 1. Our own published videos first — they carry a real embed URL in the
+  //    database and must play inline (this is the publish-announcement path).
+  const own = await resolveOwnVideo(raw);
+  if (own) {
+    return NextResponse.json(own);
+  }
+
+  // 2. Derive everything we can from the URL alone.
   const derived = deriveEmbedFromUrl(raw);
 
   if (derived) {

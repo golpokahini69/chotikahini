@@ -295,8 +295,18 @@ function FormattedChatMessage({
   })();
 
   // Video platforms get the rich player card instead of the plain OG card.
+  // Our OWN `/video/<public-slug>` and `/videos/<id>` links count too: the
+  // publish announcement links there, and `/api/video-info` resolves the
+  // stored embed so the player works right inside the chat.
   const isVideoLink = (() => {
     if (!firstExternalLink) return false;
+    try {
+      const path = new URL(firstExternalLink).pathname;
+      if (/^\/video\/[a-z0-9][a-z0-9-]{0,80}\/?$/i.test(path)) return true;
+      if (/^\/videos\/[0-9a-f-]{8,}\/?$/i.test(path)) return true;
+    } catch {
+      /* not an absolute URL — fall through to provider detection */
+    }
     return deriveEmbedFromUrl(firstExternalLink) !== null;
   })();
 
@@ -648,21 +658,28 @@ export function ChatRoom() {
           // `chat_messages` only stores (user_id, message). Realtime echoes the
           // raw row, so profile fields are attached from the AuthContext user
           // when it matches, otherwise a refetch fills the rest in.
+          //
+          // System announcements are the exception: they DO arrive with their
+          // own identity (`username`/`name`/`role`/`is_system`) and have a real
+          // admin user_id as their FK target, so the row's own fields must win
+          // — otherwise the "সিস্টেম" pill would flash as the admin's profile.
           const isOwn = raw.user_id === user?.id;
-          const incoming = {
-            ...raw,
-            username: isOwn ? (user?.username ?? raw.user_id) : raw.user_id,
-            name: isOwn ? (user?.name ?? user?.username ?? raw.user_id) : raw.user_id,
-            profile_pic: isOwn ? (user?.profilePic ?? null) : null,
-            role: isOwn ? (user?.role ?? "user") : "user",
-          } as ChatMessage;
+          const incoming = raw.is_system
+            ? ({ ...raw } as ChatMessage)
+            : ({
+                ...raw,
+                username: isOwn ? (user?.username ?? raw.user_id) : raw.user_id,
+                name: isOwn ? (user?.name ?? user?.username ?? raw.user_id) : raw.user_id,
+                profile_pic: isOwn ? (user?.profilePic ?? null) : null,
+                role: isOwn ? (user?.role ?? "user") : "user",
+              } as ChatMessage);
           if (messagesRef.current.some((message) => message.id === incoming.id)) return;
           const shouldStickToBottom = isNearBottomRef.current;
           if (shouldStickToBottom) pendingBottomScrollRef.current = true;
           setMessages((prev) =>
             prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming],
           );
-          if (!isOwn) {
+          if (!isOwn && !raw.is_system) {
             // Hydrate the other user's profile + re-sort in one pass.
             fetchMessages(chat, true);
           }

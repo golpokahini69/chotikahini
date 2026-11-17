@@ -21,11 +21,21 @@ import { ROLE_NOTIF_TYPES, NOTIFICATION_TYPES, isUserTargetedType } from "@/lib/
  * widen the query. The real ids come from the DB — `getRealAdminIds` only
  * includes the env superadmin id when a row for it actually exists.
  */
+let adminIdsCache: { ids: string[]; at: number } | null = null;
+
 async function resolveAdminIds(supabase: any): Promise<string[]> {
-  return getRealAdminIds(supabase);
+  // Short memo: the badge poll hits this route often. Ids only change when an
+  // admin account is created/removed — 60s of staleness is invisible there
+  // and saves one users read per poll.
+  if (adminIdsCache && Date.now() - adminIdsCache.at < 60_000) {
+    return adminIdsCache.ids;
+  }
+  const ids = await getRealAdminIds(supabase);
+  adminIdsCache = { ids, at: Date.now() };
+  return ids;
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   const session = await getSession();
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -40,6 +50,25 @@ export async function GET() {
 
     const supabase = getSupabaseAdmin();
     const adminIds = await resolveAdminIds(supabase);
+
+    // ── Fast badge path ──────────────────────────────────────────────────
+    // `?count=1` answers "how many unread?" with ONE head-count: no rows, no
+    // user join, no JSON mapping. The dashboard's periodic badge refresh uses
+    // this instead of re-downloading the whole notification list every 30s.
+    // Same scoping as the full read (role allowlist + admin/session ids).
+    if (new URL(req.url).searchParams.get("count") === "1") {
+      const { count, error: countError } = await supabase
+        .from("notifications")
+        .select("id", { count: "exact", head: true })
+        .or(`user_id.in.(${[...adminIds, session.id].join(",")})`)
+        .in("type", allowedTypes)
+        .eq("is_read", false);
+      if (countError) throw countError;
+      return NextResponse.json(
+        { unreadCount: count || 0 },
+        { headers: { "Cache-Control": "private, max-age=0, must-revalidate" } },
+      );
+    }
 
     // Only notifications the role is entitled to see (by type) AND that are
     // bound to admin recipients or this specific user.
