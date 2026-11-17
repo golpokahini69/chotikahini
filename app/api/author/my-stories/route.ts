@@ -41,14 +41,18 @@ export async function GET(req: Request) {
     }
 
     // 2. Fetch stories from Supabase stories table.
-    //    Skip the heavy content column in brief mode; wordCount is precomputed below.
+    //    Brief mode is the LIST mode used by dashboards, the profile page and
+    //    the editor's previous-post dropdown — it must NOT pull the `content`
+    //    column: 242 stories × ~30 KB = 7.1 MB and an 11 s PostgREST round
+    //    trip on every list load. `reading_time` travels instead so the
+    //    profile can still show an accurate read time without the body.
     //
     //    `public_slug` is optional — see scripts/media-slugs.sql. If the
     //    column isn't there yet, fall back to the pre-migration column set
     //    so the list still loads.
     const BRIEF_COLUMNS =
-      "uid, slug, title, category, description, cover, tags, previous_post, published_at, updated_at, scheduled_at, status, rejection_reason, history, author_id, content";
-    const BRIEF_COLUMNS_WITH_SLUG = `uid, slug, public_slug, title, category, description, cover, tags, previous_post, published_at, updated_at, scheduled_at, status, rejection_reason, history, author_id, content`;
+      "uid, slug, title, category, description, cover, tags, previous_post, published_at, updated_at, scheduled_at, status, rejection_reason, history, author_id, reading_time";
+    const BRIEF_COLUMNS_WITH_SLUG = `uid, slug, public_slug, title, category, description, cover, tags, previous_post, published_at, updated_at, scheduled_at, status, rejection_reason, history, author_id, reading_time`;
 
     const runQuery = (columns: string) =>
       supabase.from("stories").select(brief ? columns : "*");
@@ -121,6 +125,7 @@ export async function GET(req: Request) {
           description: s.description || "",
           content: brief ? "" : (s.content ? s.content.trim() : ""),
           wordCount: s.content ? s.content.trim().split(/\s+/).length : 0,
+          readingTime: s.reading_time || "",
           cover: s.cover || "",
           tags: Array.isArray(s.tags) ? s.tags.join(", ") : s.tags || "",
           previousPost: s.previous_post || "",

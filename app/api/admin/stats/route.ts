@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { getSession } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
+import { CACHE_TAGS, cachedRead } from "@/lib/cache";
 
 /**
  * GET /api/admin/stats — dashboard overview numbers.
@@ -9,6 +10,9 @@ import { hasPermission } from "@/lib/permissions";
  * Design rules (this is one of the most-called admin endpoints):
  *   • EVERY independent read runs inside ONE Promise.all — the old version
  *     awaited them in sequence, so latency summed up (~10 round-trips).
+ *     The scheduled-media counts used to run in a SECOND sequential batch
+ *     (another full Supabase round-trip on top); they are in the same batch
+ *     now, so a cold cache costs exactly ONE parallel round-trip.
  *   • Only `head: true` counts and tiny bounded reads travel: never whole
  *     tables, never raw visitor rows.
  *   • Works WITHOUT the `admin_visit_stats` RPC: that function exists in
@@ -17,6 +21,20 @@ import { hasPermission } from "@/lib/permissions";
  *     right. Each aggregate has a cheap PostgREST fallback below.
  *   • No live-visitor counter: in-memory "online now" tracking was removed
  *     as per-product requirement (no live visitor tracking).
+ *
+ * ── Why the shared Data Cache instead of a process-local memo ───────────
+ * Measured against the live database: EVERY PostgREST round-trip costs
+ * ~1–2.4 s regardless of row count. The previous process-local 60 s memo
+ * died with each serverless instance, so a cold dashboard still paid the
+ * whole batch. `cachedRead` stores the aggregates in Next's shared Data
+ * Cache: after one computation, every instance (and every cold start)
+ * serves the numbers with zero Supabase requests for 60 s.
+ *
+ * The aggregates are pure counts — never per-user rows — and the per-role
+ * visibility gate is re-applied on EVERY request before anything is sent,
+ * so a cached value is never shown to a role that may not see it.
+ * Story/user writes tag-invalidate the entry (`posts` / `users`), so the
+ * numbers refresh immediately after a publish.
  */
 
 /**
@@ -31,18 +49,6 @@ import { hasPermission } from "@/lib/permissions";
  * could have installed it).
  */
 let rpcMissUntil = 0;
-
-/**
- * Aggregate memo (60s, process-local).
- *
- * The dashboard re-fetches stats every time the admin navigates back to it
- * (and after every action). Auth and the per-role gate still run on every
- * request — only the numbers are reused — so returning to the dashboard
- * costs one session-hydration round-trip instead of the full count batch.
- * Values are pure aggregates (counts), never per-user rows.
- */
-const STATS_TTL_MS = 60_000;
-let statsCache: { value: Record<string, unknown>; expires: number } | null = null;
 
 async function readStoryViewTotal(supabase: ReturnType<typeof getSupabaseAdmin>): Promise<number> {
   // Preferred: one aggregate statement, no rows.
@@ -74,43 +80,21 @@ async function readStoryViewTotal(supabase: ReturnType<typeof getSupabaseAdmin>)
   }
 }
 
-export async function GET() {
-  const session = await getSession();
-  if (!session || !hasPermission(session.role, "analytics.view")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  const canSeeUserStats = hasPermission(session.role, "users.view");
-
-  // Serve recent aggregates without touching Supabase at all. The gate is
-  // re-applied per request, so a cached value is never shown to a role that
-  // may not see it.
-  if (statsCache && statsCache.expires > Date.now()) {
-    const cached = statsCache.value;
-    return NextResponse.json({
-      totalUsers: canSeeUserStats ? cached.totalUsers : undefined,
-      rolesCount: canSeeUserStats ? cached.rolesCount : undefined,
-      dailyCount: cached.dailyCount,
-      totalPageViews: cached.totalPageViews,
-      totalStories: cached.totalStories,
-      publishedStories: cached.publishedStories,
-      pendingStories: cached.pendingStories,
-      scheduledStories: cached.scheduledStories,
-      scheduledVideos: cached.scheduledVideos,
-      scheduledPictures: cached.scheduledPictures,
-    });
-  }
-
-  try {
+/** The aggregate batch itself — cached for 60 s in the shared Data Cache. */
+const readStatsBatch = cachedRead(
+  "admin-stats-batch",
+  async (): Promise<Record<string, unknown>> => {
     const supabase = getSupabaseAdmin();
 
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todayIso = todayStart.toISOString();
     const nowIso = new Date().toISOString();
+    const mediaNow = nowIso;
 
     const ROLES = ["superadmin", "admin", "author", "user"] as const;
 
-    // ── One parallel batch: every result is a count or a small bounded set ──
+    // ── ONE parallel batch: every result is a count or a small bounded set ──
     const [
       usersCountRes,
       roleCountRes,
@@ -119,6 +103,8 @@ export async function GET() {
       storyCountRes,
       statusRowsRes,
       pendingRowsRes,
+      scheduledVideosRes,
+      scheduledPicturesRes,
     ] = await Promise.all([
       // 1. Registered users — count only (the old `select('*')` of the whole
       //    users table crossed the wire on every dashboard load).
@@ -162,6 +148,21 @@ export async function GET() {
         .select("uid, history")
         .eq("status", "pending")
         .limit(1000),
+
+      // 8/9. Scheduled media — previously a SECOND sequential batch (another
+      //      full round-trip); same Promise.all now.
+      supabase
+        .from("video_posts")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "published")
+        .not("scheduled_at", "is", null)
+        .gt("scheduled_at", mediaNow),
+      supabase
+        .from("picture_galleries")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "published")
+        .not("scheduled_at", "is", null)
+        .gt("scheduled_at", mediaNow),
     ]);
 
     const totalUsers = usersCountRes.count || 0;
@@ -204,23 +205,6 @@ export async function GET() {
       }
     }
 
-    // ── Scheduled media (parallel, head-counts) ──
-    const mediaNow = new Date().toISOString();
-    const [vr, pr] = await Promise.all([
-      supabase
-        .from("video_posts")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "published")
-        .not("scheduled_at", "is", null)
-        .gt("scheduled_at", mediaNow),
-      supabase
-        .from("picture_galleries")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "published")
-        .not("scheduled_at", "is", null)
-        .gt("scheduled_at", mediaNow),
-    ]);
-
     // "Today's hits" = readers today.
     //
     // This used to also head-count `page_visits` first — but that table does
@@ -229,7 +213,7 @@ export async function GET() {
     // to exactly the number it now returns directly.
     const dailyCount = todayVisitorsCount;
 
-    const payload: Record<string, unknown> = {
+    return {
       totalUsers,
       rolesCount,
       dailyCount,
@@ -238,20 +222,35 @@ export async function GET() {
       publishedStories,
       pendingStories,
       scheduledStories,
-      scheduledVideos: vr.count ?? 0,
-      scheduledPictures: pr.count ?? 0,
+      scheduledVideos: scheduledVideosRes.count ?? 0,
+      scheduledPictures: scheduledPicturesRes.count ?? 0,
     };
-    statsCache = { value: payload, expires: Date.now() + STATS_TTL_MS };
+  },
+  {
+    revalidate: 60,
+    tags: [CACHE_TAGS.posts, CACHE_TAGS.users],
+  },
+);
+
+export async function GET() {
+  const session = await getSession();
+  if (!session || !hasPermission(session.role, "analytics.view")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const canSeeUserStats = hasPermission(session.role, "users.view");
+
+  try {
+    const payload = await readStatsBatch();
 
     return NextResponse.json({
       totalUsers: canSeeUserStats ? payload.totalUsers : undefined,
       rolesCount: canSeeUserStats ? payload.rolesCount : undefined,
-      dailyCount,
-      totalPageViews: totalViewCount,
-      totalStories,
-      publishedStories,
-      pendingStories,
-      scheduledStories,
+      dailyCount: payload.dailyCount,
+      totalPageViews: payload.totalPageViews,
+      totalStories: payload.totalStories,
+      publishedStories: payload.publishedStories,
+      pendingStories: payload.pendingStories,
+      scheduledStories: payload.scheduledStories,
       scheduledVideos: payload.scheduledVideos,
       scheduledPictures: payload.scheduledPictures,
     });

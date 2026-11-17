@@ -59,6 +59,17 @@ interface Props {
 
 const META_DEBOUNCE_MS = 700;
 
+/** Short human tail of an image URL for <option> labels. */
+function urlTail(url: string): string {
+  const cut = (s: string) => (s.length > 30 ? `…${s.slice(-30)}` : s);
+  try {
+    const u = new URL(url);
+    return cut(u.pathname.split("/").filter(Boolean).pop() || u.hostname);
+  } catch {
+    return cut(url.split("/").filter(Boolean).pop() || url);
+  }
+}
+
 export function PictureFormFields({
   values,
   onChange,
@@ -77,6 +88,19 @@ export function PictureFormFields({
   const [loading, setLoading] = useState(false);
   const [metaError, setMetaError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PictureImageValue[]>([]);
+
+  // Cover picker state: the dropdown lists every image already in the form
+  // so the admin can switch the cover visually instead of pasting URLs.
+  const [useCustomCover, setUseCustomCover] = useState(false);
+  const coverMatch = values.images.find((img) => img.url === values.coverUrl);
+  const coverIsCustom =
+    useCustomCover || (!!values.coverUrl && !coverMatch && values.images.length > 0);
+  const showCoverUrlInput = values.images.length === 0 || coverIsCustom;
+  const coverSelectValue = coverIsCustom ? "__custom__" : coverMatch ? coverMatch.url : "";
+  const coverOptions = values.images.map((img, i) => ({
+    url: img.url,
+    label: `ছবি ${i + 1}${img.width && img.height ? ` · ${img.width}×${img.height}` : ""} — ${urlTail(img.thumb || img.url)}`,
+  }));
 
   // Server-side scrape, debounced on the gallery URL field.
   useEffect(() => {
@@ -408,29 +432,81 @@ export function PictureFormFields({
         />
       </label>
 
-      <label
-        className="block space-y-1.5 text-sm font-medium text-fg"
-        htmlFor={`${idPrefix}-cover`}
-      >
-        কভার ছবির HTTPS URL
-        <input
-          id={`${idPrefix}-cover`}
-          type="url"
-          inputMode="url"
-          value={values.coverUrl}
-          onChange={(e) => {
-            touched.current.coverUrl = true;
-            onChange({ coverUrl: e.target.value });
-          }}
-          maxLength={2048}
-          required
-          className="input-field w-full"
-          placeholder="https://.../1280/...jpg"
-        />
+      {/* ---- Cover: pick from the gallery's images, or paste a URL ---- */}
+      <div className="space-y-1.5">
+        <label
+          className="block text-sm font-medium text-fg"
+          htmlFor={`${idPrefix}-cover`}
+        >
+          কভার ছবি
+        </label>
+
+        {coverOptions.length > 0 ? (
+          <select
+            id={`${idPrefix}-cover`}
+            value={coverSelectValue}
+            onChange={(e) => {
+              const next = e.target.value;
+              touched.current.coverUrl = true;
+              if (next === "__custom__") {
+                setUseCustomCover(true);
+                onChange({ coverUrl: "" });
+              } else {
+                setUseCustomCover(false);
+                onChange({ coverUrl: next });
+              }
+            }}
+            required={!showCoverUrlInput}
+            className="input-field w-full"
+          >
+            <option value="" disabled>
+              — গ্যালারি থেকে কভার বাছুন —
+            </option>
+            {coverOptions.map((opt) => (
+              <option key={opt.url} value={opt.url}>
+                {opt.label}
+              </option>
+            ))}
+            <option value="__custom__">নিজের HTTPS URL ব্যবহার করব…</option>
+          </select>
+        ) : null}
+
+        {showCoverUrlInput ? (
+          <input
+            id={coverOptions.length > 0 ? `${idPrefix}-cover-url` : `${idPrefix}-cover`}
+            type="url"
+            inputMode="url"
+            value={values.coverUrl}
+            onChange={(e) => {
+              touched.current.coverUrl = true;
+              onChange({ coverUrl: e.target.value });
+            }}
+            maxLength={2048}
+            required
+            className="input-field w-full"
+            placeholder="https://.../1280/...jpg"
+          />
+        ) : null}
+
+        {values.coverUrl ? (
+          <span className="block h-24 w-16 overflow-hidden rounded-lg border border-border bg-surface-alt">
+            <Image
+              src={values.coverUrl}
+              alt=""
+              width={64}
+              height={96}
+              unoptimized
+              className="h-full w-full object-cover"
+            />
+          </span>
+        ) : null}
+
         <span className="block text-xs font-normal leading-5 text-fg-muted">
-          গ্যালারির প্রথম ছবিটাই কভার হিসেবে বসে থাকে।
+          {coverOptions.length > 0
+            ? "ড্রপডাউন থেকে গ্যালারির যেকোনো ছবি বাছুন — আলাদা লিংক লাগলে শেষ অপশনটি বেছে নিন।"
+            : "গ্যালারির প্রথম ছবিটাই কভার হিসেবে বসে থাকে।"}
         </span>
-      </label>
+      </div>
 
       {/* ---- Scheduled publishing ----------------------------------------
           Empty = publish right away. A future date parks the gallery until

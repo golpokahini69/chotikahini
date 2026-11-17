@@ -156,7 +156,9 @@ export default function StoryEditor({ initialData, draftName, categories, author
 
   // Load all stories for previous-post dropdown + auto-import
   useEffect(() => {
-    fetch("/api/author/my-stories?all=true")
+    // Brief mode: only uid/slug/title are read below — the full table (with
+    // every story body, ~7 MB) used to be downloaded for this dropdown.
+    fetch("/api/author/my-stories?all=true&brief=1")
       .then(res => res.json())
       .then((json: any) => {
         if (json && Array.isArray(json.stories)) {
@@ -515,11 +517,17 @@ export default function StoryEditor({ initialData, draftName, categories, author
             <div className="flex items-center gap-2 min-w-0">
               <span className="font-bold text-amber-800 dark:text-amber-300 shrink-0">গল্পের লাইভ লিংক:</span>
               <span className="font-mono text-blue-600 dark:text-blue-400 font-semibold truncate select-all">
-                {`${typeof window !== "undefined" ? window.location.origin : getClientSiteUrl()}/${formData.uid || initialData?.slug || "১৪-সংখ্যার আইডি"}`}
+                {initialData?.publicSlug
+                  ? `${typeof window !== "undefined" ? window.location.origin : getClientSiteUrl()}/golpo/${initialData.publicSlug}`
+                  : `${typeof window !== "undefined" ? window.location.origin : getClientSiteUrl()}/${formData.uid || initialData?.slug || "১৪-সংখ্যার আইডি"}`}
               </span>
             </div>
-            <span className="text-[11px] text-amber-700 dark:text-amber-400 font-bold bg-surface-alt px-2.5 py-0.5 rounded-full border border-amber-200 dark:border-amber-800 shrink-0">
-              অপ্রকাশিত (প্রকাশের পর অ্যাক্টিভ হবে)
+            <span className={`text-[11px] font-bold bg-surface-alt px-2.5 py-0.5 rounded-full border shrink-0 ${
+              initialData?.publicSlug
+                ? "text-green-700 dark:text-green-400 border-green-300 dark:border-green-800"
+                : "text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800"
+            }`}>
+              {initialData?.publicSlug ? "একটিভ (ক্যানোনিক্যাল লিংক)" : "অপ্রকাশিত (প্রকাশের পর অ্যাক্টিভ হবে)"}
             </span>
           </div>
 

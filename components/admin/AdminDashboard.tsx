@@ -426,6 +426,11 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
 
   // Review modal state
   const [reviewStory, setReviewStory] = useState<any | null>(null);
+  // The review queue is fetched in brief mode (the `content` column would be
+  // ~7 MB across the catalogue), so the story body is loaded on demand the
+  // moment a story is opened for review — one story at a time.
+  const [reviewContent, setReviewContent] = useState("");
+  const [reviewContentLoaded, setReviewContentLoaded] = useState(false);
   const [reviewFilter, setReviewFilter] = useState<"all" | "pending" | "revision_requested" | "published" | "rejected">("pending");
   const [selectedAuthorFilter, setSelectedAuthorFilter] = useState<string>("");
   const [reviewActionType, setReviewActionType] = useState<"revision" | "reject" | "edit_publish" | null>(null);
@@ -443,6 +448,39 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
   const [coauthorBusy, setCoauthorBusy] = useState(false);
   const [coauthorMsg, setCoauthorMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
+
+  // Load the story body when a story is opened for review (brief lists carry
+  // no `content`). The edit action stays disabled until this resolves, so an
+  // "edit & publish" can never save the description over a missing body.
+  useEffect(() => {
+    const ref = reviewStory?.uid || reviewStory?.slug;
+    if (!reviewStory || !ref) {
+      setReviewContent("");
+      setReviewContentLoaded(false);
+      return;
+    }
+    if (reviewStory.content) {
+      setReviewContent(reviewStory.content);
+      setReviewContentLoaded(true);
+      return;
+    }
+    let cancelled = false;
+    setReviewContent("");
+    setReviewContentLoaded(false);
+    fetch(`/api/author/story-content?uid=${encodeURIComponent(ref)}`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then((json) => {
+        if (!cancelled && json?.story) setReviewContent(json.story.content || "");
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setReviewContentLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewStory?.uid, reviewStory?.slug]);
 
   // Hydrate the co-author chips whenever the review modal opens for a
   // different story. Without this the editor would always show an empty
@@ -485,7 +523,7 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
 
   const fetchDrafts = async () => {
     try {
-      const res = await fetch("/api/author/my-stories");
+      const res = await fetch("/api/author/my-stories?brief=1");
       const json = await res.json();
       if (res.ok && Array.isArray(json.stories)) {
         const draftStories = json.stories.filter((s: any) => s.status === "draft");
@@ -519,7 +557,7 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
   const fetchAllStoriesForReview = async () => {
     setLoadingStoriesQueue(true);
     try {
-      const res = await fetch("/api/author/my-stories?all=true");
+      const res = await fetch("/api/author/my-stories?all=true&brief=1");
       if (res.ok) {
         const json = await res.json();
         const stories = json.stories || [];
@@ -617,7 +655,7 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
     setViewingAuthor(authorObj);
     setLoadingAuthorStories(true);
     try {
-      const res = await fetch(`/api/author/my-stories?author=${encodeURIComponent(authorObj.username)}`);
+      const res = await fetch(`/api/author/my-stories?brief=1&author=${encodeURIComponent(authorObj.username)}`);
       if (res.ok) {
         const json = await res.json();
         setViewingAuthorStories(json.stories || []);
@@ -1385,7 +1423,7 @@ return (
                                   {copiedLinkUid === (post.uid || post.slug) ? "কপি!" : "লিংক"}
                                 </button>
                                 <Link 
-                                  href={`/${post.uid || post.slug}`}
+                                  href={post.publicSlug ? `/golpo/${post.publicSlug}` : `/${post.uid || post.slug}`}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="flex items-center gap-1 text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/20 dark:text-blue-400 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
@@ -2468,10 +2506,12 @@ return (
                     </>
                   ) : (
                     <>
-                      {reviewStory.content || reviewStory.description || "গল্পের মূল কন্টেন্ট দেখাচ্ছে..."}
+                      {reviewContentLoaded
+                        ? (reviewContent || reviewStory.description || "কোনো কনটেন্ট নেই।")
+                        : "কনটেন্ট লোড হচ্ছে…"}
                       <div className="mt-4">
                         <SimilarityCheck
-                          content={reviewStory.content || reviewStory.description || ""}
+                          content={reviewContentLoaded ? (reviewContent || reviewStory.description || "") : ""}
                           title={reviewStory.title}
                           excludeRef={reviewStory.uid || reviewStory.slug || null}
                         />
@@ -2566,10 +2606,11 @@ return (
                       </button>
 
                       <button
-                        disabled={reviewSubmitting}
+                        disabled={reviewSubmitting || !reviewContentLoaded}
+                        title={reviewContentLoaded ? undefined : "গল্পের কনটেন্ট লোড হচ্ছে…"}
         onClick={() => {
           setEditedTitle(reviewStory.title || "");
-          setEditedContent(reviewStory.content || reviewStory.description || "");
+          setEditedContent(reviewContent || reviewStory.content || reviewStory.description || "");
           setEditedDescription(reviewStory.description || "");
           setEditedCategory(reviewStory.category || "golpo");
           setEditedTags(Array.isArray(reviewStory.tags) ? reviewStory.tags.join(", ") : reviewStory.tags || "");

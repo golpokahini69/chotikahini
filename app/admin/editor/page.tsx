@@ -50,6 +50,7 @@ export default async function EditorPage({
       initialData = {
         uid: post.uid,
         fileSlug: post.fileSlug,
+        publicSlug: post.publicSlug || null,
         title: post.title || "",
         description: post.description || "",
         author: post.authorId || "",

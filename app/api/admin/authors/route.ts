@@ -118,16 +118,20 @@ export async function GET() {
   try {
     const supabase = getSupabaseAdmin();
 
-    // 1. Fetch registered users from Supabase
-    const { data: authorUsers } = await supabase
-      .from("users")
-      .select("*")
-      .in("role", ["author", "admin", "superadmin"]);
-
-    // 2. Fetch all stories from Supabase to aggregate stats directly from DB
-    const { data: stories } = await supabase
-      .from("stories")
-      .select("author_id, status, history");
+    // ONE parallel batch: the two reads used to run in sequence, so every
+    // dashboard open paid two full Supabase round-trips back to back
+    // (measured ~1–2.4 s EACH against the live database). The users select
+    // is narrowed to the columns the response actually uses — the old
+    // `select("*")` also shipped password_hash across the wire for nothing.
+    const [{ data: authorUsers }, { data: stories }] = await Promise.all([
+      supabase
+        .from("users")
+        .select("id, username, name, email, role, profile_pic, created_at")
+        .in("role", ["author", "admin", "superadmin"]),
+      supabase
+        .from("stories")
+        .select("author_id, status, history"),
+    ]);
 
     const authorStatsMap: Record<string, { total: number; published: number; pending: number; revision: number; rejected: number }> = {};
 

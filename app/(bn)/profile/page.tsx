@@ -985,7 +985,14 @@ export default function ProfilePage() {
                               <div className="divide-y divide-border">
                                 {paginatedList.map((story) => {
                                   const words = story.wordCount || (story.content ? story.content.trim().split(/\s+/).length : 0);
-                                  const readMins = Math.max(1, Math.ceil(words / 180));
+                                  // Brief lists no longer ship the story body, so word
+                                  // count can be 0 — fall back to the precomputed
+                                  // reading time ("11 min read") instead of "1 min".
+                                  const parsedMins = parseInt(String(story.readingTime || "").match(/\d+/)?.[0] || "", 10);
+                                  const readMins = words > 0
+                                    ? Math.max(1, Math.ceil(words / 180))
+                                    : (Number.isFinite(parsedMins) && parsedMins > 0 ? parsedMins : 1);
+                                  const storyHref = story.publicSlug ? `/golpo/${story.publicSlug}` : `/${story.uid || story.slug}`;
                                   const isTimelineOpen = expandedTimelineSlug === story.slug;
 
                                   return (
@@ -1018,7 +1025,7 @@ export default function ProfilePage() {
                                             <span>&bull;</span>
                                             <span>জমা: {bndSafe(story.publishedAt, "date")}</span>
                                             <span>&bull;</span>
-                                            <span>{enToBnNumber(words)} শব্দ (~{enToBnNumber(readMins)} মিনিট পড়া)</span>
+                                            <span>{words > 0 ? enToBnNumber(words) + " শব্দ (~" + enToBnNumber(readMins) + " মিনিট পড়া)" : enToBnNumber(readMins) + " মিনিট পড়া"}</span>
                                             {story.version > 1 && (
                                               <>
                                                 <span>&bull;</span>
@@ -1033,7 +1040,7 @@ export default function ProfilePage() {
                                         <div className="flex items-center gap-2">
                                           {story.status === "published" && (
                                             <>
-                                              <Link href={`/${story.uid || story.slug}`} target="_blank" className="btn-secondary text-xs px-3 py-1.5">
+                                              <Link href={storyHref} target="_blank" className="btn-secondary text-xs px-3 py-1.5">
                                                 গল্পটি পড়ুন &rarr;
                                               </Link>
                                               <button
@@ -1047,7 +1054,7 @@ export default function ProfilePage() {
                                               <button
                                                 type="button"
                                                 onClick={() => {
-                                                  const url = `${window.location.origin}/${story.uid || story.slug}`;
+                                                  const url = `${window.location.origin}${storyHref}`;
                                                   navigator.clipboard.writeText(url);
                                                   setCopiedStorySlug(story.slug);
                                                   setTimeout(() => setCopiedStorySlug(null), 2000);

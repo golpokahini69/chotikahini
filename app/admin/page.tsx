@@ -31,6 +31,9 @@ export default async function AdminPage() {
     uid: post.uid || "",
     slug: post.slug,
     fileSlug: post.fileSlug,
+    // Canonical public slug — without it every "copy link" / "view" action
+    // in the panel falls back to the legacy /{uid} URL.
+    publicSlug: post.publicSlug || null,
     publishedAt: post.publishedAt,
     categoryName: post.categoryName,
     cover: post.cover || "",

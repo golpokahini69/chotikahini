@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { CACHE_TAGS, cachedRead } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
 
@@ -26,14 +27,18 @@ export const dynamic = "force-dynamic";
  *
  * ── Now ──────────────────────────────────────────────────────────────────
  *   • TWO head-counts (0 rows) run in ONE Promise.all batch;
- *   • the result is memoised in-process for 60s — tab switches and returns
- *     cost no Supabase request at all;
+ *   • the result lives in Next's SHARED Data Cache for 60 s (the previous
+ *     process-local memo died with every serverless instance, so a cold
+ *     start still paid the batch — shared cache makes repeat opens and
+ *     tab switches cost zero Supabase requests on every instance);
  *   • NO page_visits, NO reading_history rows, NO RPC dependency: the
  *     widget set was cut to what the live database can actually answer
  *     (per brief §5/§6: drop widgets that only feed off raw event history
  *     that we no longer collect — the per-day visit chart and the
  *     "total visits" card were permanently 0/empty here and are removed);
  *   • each count is failure-isolated (safeCount);
+ *   • per-role gating is re-applied on every request; aggregates are pure
+ *     counts, never per-user rows;
  *   • `private, no-store` — admin numbers are never publicly cached.
  *
  * Kept aggregates: active users today, active users in 7 days (from
@@ -41,16 +46,12 @@ export const dynamic = "force-dynamic";
  * users. Total story views and today's hits stay in /api/admin/stats.
  */
 
-const CACHE_TTL_MS = 60_000;
-
 interface Aggregates {
   activeToday: number;
   active7d: number;
 }
 
-let aggregateCache: { value: Aggregates; expires: number } | null = null;
-
-/** A rejected count returns a zero instead of failing the whole panel. */
+/** Rejected counts return zeros instead of failing the whole panel. */
 async function safeCount(promise: PromiseLike<{ count: number | null }>): Promise<number> {
   try {
     const { count } = await promise;
@@ -60,36 +61,34 @@ async function safeCount(promise: PromiseLike<{ count: number | null }>): Promis
   }
 }
 
-async function loadAggregates(): Promise<Aggregates> {
-  if (aggregateCache && aggregateCache.expires > Date.now()) {
-    return aggregateCache.value;
-  }
+const loadAggregates = cachedRead(
+  "admin-analytics-aggregates",
+  async (): Promise<Aggregates> => {
+    const supabase = getSupabaseAdmin();
+    const dayStart24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const dayStart7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  const supabase = getSupabaseAdmin();
-  const dayStart24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const dayStart7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    // ONE batch: two indexed head-counts, zero rows, parallel — wall time
+    // equals the slowest single request (~one round-trip), not their sum.
+    const [activeToday, active7d] = await Promise.all([
+      safeCount(
+        supabase
+          .from("users")
+          .select("id", { count: "exact", head: true })
+          .gte("last_seen_at", dayStart24h),
+      ),
+      safeCount(
+        supabase
+          .from("users")
+          .select("id", { count: "exact", head: true })
+          .gte("last_seen_at", dayStart7d),
+      ),
+    ]);
 
-  // ONE batch: two indexed head-counts, zero rows, parallel — wall time
-  // equals the slowest single request (~one round-trip), not their sum.
-  const [activeToday, active7d] = await Promise.all([
-    safeCount(
-      supabase
-        .from("users")
-        .select("id", { count: "exact", head: true })
-        .gte("last_seen_at", dayStart24h),
-    ),
-    safeCount(
-      supabase
-        .from("users")
-        .select("id", { count: "exact", head: true })
-        .gte("last_seen_at", dayStart7d),
-    ),
-  ]);
-
-  const value: Aggregates = { activeToday, active7d };
-  aggregateCache = { value, expires: Date.now() + CACHE_TTL_MS };
-  return value;
-}
+    return { activeToday, active7d };
+  },
+  { revalidate: 60, tags: [CACHE_TAGS.users] },
+);
 
 /** Admin-only analytics aggregation endpoint. */
 export async function GET() {
