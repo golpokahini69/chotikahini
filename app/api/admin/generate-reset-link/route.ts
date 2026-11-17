@@ -54,9 +54,33 @@ export async function POST(req: Request) {
     }
 
     // Single-use token reset URL (contains NO plain password)
-    const origin = req.headers.get("origin") || req.headers.get("host") || getSiteConfig().url.replace(/\/$/, "");
-    const cleanOrigin = origin.startsWith("http") ? origin : `https://${origin}`;
-    const resetUrl = `${cleanOrigin}/auth/reset-password?token=${resetToken}&user=${encodeURIComponent(user.username)}`;
+    //
+    // The origin MUST be the canonical public site. The old code preferred
+    // `req.headers.origin`, which on a production deployment can be a preview
+    // host or a localhost dev origin — the admin then copied a dead link
+    // ("reset link generate hoy na"). Env/site config wins; headers are only
+    // a last-resort fallback for local development.
+    const origin = (() => {
+      const candidates = [
+        process.env.NEXT_PUBLIC_SITE_URL,
+        getSiteConfig().url,
+        req.headers.get("origin"),
+        req.headers.get("host") ? `https://${req.headers.get("host")}` : "",
+      ];
+      for (const raw of candidates) {
+        const value = (raw || "").trim().replace(/\/+$/, "");
+        if (!value) continue;
+        const absolute = value.startsWith("http") ? value : `https://${value}`;
+        if (!/^https?:\/\//i.test(absolute)) continue;
+        // Skip dev hosts unless nothing else exists.
+        if (/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?/i.test(absolute)) continue;
+        return absolute;
+      }
+      // Nothing usable configured: keep the request host so dev still works.
+      const fallbackHost = (req.headers.get("host") || "localhost:3000").replace(/\/+$/, "");
+      return fallbackHost.startsWith("http") ? fallbackHost : `https://${fallbackHost}`;
+    })();
+    const resetUrl = `${origin}/auth/reset-password?token=${resetToken}&user=${encodeURIComponent(user.username)}`;
 
     const emailSubject = `পাসওয়ার্ড রিসেট করার নিরাপত্তা লিঙ্ক — ${getSiteConfig().title}`;
     const emailBody = `প্রিয় ${user.name || user.username},

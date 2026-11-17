@@ -14,6 +14,18 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { enToBnNumber, bndSafe } from "@/lib/utils";
+
+/** Human duration in Bengali: "২ ঘ ১৫ মি", "৪৫ সেকেন্ড", "৩ দিন ২ ঘ". */
+function formatDurationBn(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.round(totalSeconds || 0));
+  if (seconds < 60) return `${enToBnNumber(seconds)} সেকেন্ড`;
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${enToBnNumber(days)} দিন${hours > 0 ? ` ${enToBnNumber(hours)} ঘ` : ""}`;
+  if (hours > 0) return `${enToBnNumber(hours)} ঘ${minutes > 0 ? ` ${enToBnNumber(minutes)} মি` : ""}`;
+  return `${enToBnNumber(minutes)} মিনিট`;
+}
 import { hasPermission as hasPerm } from "@/lib/permissions";
 import { getAllCategoryConfigs } from "@/lib/config";
 import { RoleGuide } from "./RoleGuide";
@@ -70,24 +82,34 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
 
   // Role-aware landing section: each admin role starts at the panel that fits its job.
   const role = user?.role;
-  const [activeSection, setActiveSection] = useState<"dashboard" | "review" | "authors" | "messages" | "notifications" | "verify" | "deletions" | "similarity">(
+  const [activeSection, setActiveSection] = useState<"dashboard" | "review" | "authors" | "messages" | "notifications" | "verify" | "deletions" | "similarity" | "activity">(
     role === "content_manager" ? "review" : "dashboard"
   );
   const searchParams = useSearchParams();
 
   useEffect(() => {
     const sec = searchParams?.get("section");
-    if (sec && ["dashboard", "review", "authors", "messages", "notifications", "verify", "deletions", "similarity"].includes(sec)) {
+    if (sec && ["dashboard", "review", "authors", "messages", "notifications", "verify", "deletions", "similarity", "activity"].includes(sec)) {
       setActiveSection(sec as any);
       if (sec === "messages") fetchContactMessages();
       if (sec === "notifications") void ensureAdminNotifications();
       if (sec === "deletions") fetchDeletionRequests();
+      if (sec === "activity") void fetchMemberActivity(activityDays);
     }
   }, [searchParams]);
 
   const [contactMessages, setContactMessages] = useState<any[]>([]);
   const [loadingContactMessages, setLoadingContactMessages] = useState(false);
   const [selectedContactMessage, setSelectedContactMessage] = useState<any | null>(null);
+
+  // Login/logout tracking ("কে কখন ঢুকল, কখন বের হলো, কতক্ষণ ছিল").
+  const [memberActivity, setMemberActivity] = useState<{
+    sessions: any[];
+    members: any[];
+    totals: { sessions: number; members: number; events: number; activeNow: number };
+  } | null>(null);
+  const [loadingActivity, setLoadingActivity] = useState(false);
+  const [activityDays, setActivityDays] = useState(7);
 
   const [adminNotifications, setAdminNotifications] = useState<any[]>([]);
   // Two-tab notification center: "নতুন" shows only what the admin hasn't
@@ -448,6 +470,8 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
   const [resetModalData, setResetModalData] = useState<any | null>(null);
   const [resetLoading, setResetLoading] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copiedSubject, setCopiedSubject] = useState(false);
+  const [copiedBody, setCopiedBody] = useState(false);
   const [copiedLinkUid, setCopiedLinkUid] = useState<string | null>(null);
 
   const copyStoryLink = async (
@@ -629,6 +653,19 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
       setLoadingDrafts(false);
     }
   };
+
+  const fetchMemberActivity = useCallback(async (days: number) => {
+    if (!hasPerm(user?.role, "users.view")) return;
+    setLoadingActivity(true);
+    try {
+      const res = await fetch(`/api/admin/member-activity?days=${days}&limit=300`);
+      if (res.ok) setMemberActivity(await res.json());
+    } catch (e) {
+      console.error("Failed to fetch member activity", e);
+    } finally {
+      setLoadingActivity(false);
+    }
+  }, [user?.role]);
 
   const fetchAnalytics = useCallback(async () => {
     if (!hasPerm(user?.role, "analytics.view")) return; // visitor analytics is admin/superadmin only
@@ -1003,6 +1040,7 @@ return (
           if (sec === "messages") fetchContactMessages();
           if (sec === "notifications") void ensureAdminNotifications();
           if (sec === "deletions") fetchDeletionRequests();
+      if (sec === "activity") void fetchMemberActivity(activityDays);
         }}
         badges={{
           pendingReviews: allStoriesQueue.filter((p) => p.status === "pending").length,
@@ -1010,7 +1048,6 @@ return (
           // Total in this admin's scope: the sidebar falls back to it when
           // nothing is unread, so "how many are there?" is always answerable
           // WITHOUT opening the section (the reported problem).
-          totalNotifications: adminNotifications.length,
           unreadMessages: contactMessages.filter((m) => !m.isRead).length,
           pendingVerifications: verifyRequests.filter((r: any) => r.status === "pending").length,
           pendingApplications: 0,
@@ -1028,6 +1065,7 @@ return (
                 {activeSection === "review" && "স্টোরি রিভিউ সেন্টার (Review Center)"}
                 {activeSection === "authors" && "নিবন্ধিত লেখকবৃন্দ (Registered Authors)"}
                 {activeSection === "notifications" && "অ্যাডমিন নোটিফিকেশন সেন্টার"}
+                {activeSection === "activity" && "সদস্য লগইন অ্যাক্টিভিটি"}
                 {activeSection === "verify" && "লেখক ভেরিফিকেশন রিকোয়েস্ট"}
                 {activeSection === "deletions" && "ডিলিট রিকোয়েস্ট (স্থায়ী মুছে ফেলা)"}
                 {activeSection === "similarity" && "ডুপ্লিকেট স্টোরি স্ক্যানার"}
@@ -1038,6 +1076,7 @@ return (
                 {activeSection === "review" && "লেখক জমার রিভিউ, সংশোধন প্রস্তাব ও রিজেক্ট ফিডব্যাক প্রদান করুন।"}
                 {activeSection === "authors" && "নিবন্ধিত লেখকদের সমস্ত গল্প ও প্রোফাইল আলাদাভাবে নিয়ন্ত্রণ করুন।"}
                 {activeSection === "notifications" && "নতুন ইউজার নিবন্ধন, পাসওয়ার্ড রিসেট ও জরুরি সাইট নোটিফিকেশন।"}
+                {activeSection === "activity" && "কে কখন লগইন করেছে, কখন লগআউট করেছে এবং কতক্ষণ অ্যাকটিভ ছিল।"}
                 {activeSection === "verify" && "লেখকদের ব্লু ভেরিফাইড ব্যাজ আবেদন অনুমোদন বা প্রত্যাখ্যান করুন।"}
                 {activeSection === "deletions" && "অ্যাডমিনদের পাঠানো স্থায়ী ডিলিট রিকোয়েস্ট অনুমোদন করুন।"}
                 {activeSection === "similarity" && "বিদ্যমান গল্পগুলোর মধ্যে মিল বা কপি হওয়া কন্টেন্ট স্বয়ংক্রিয়ভাবে শনাক্ত করুন।"}
@@ -2320,6 +2359,140 @@ return (
             </div>
           )}
 
+          {/* LOGIN ACTIVITY SECTION — who logged in when, when they left,
+              and how long they stayed (member-activity API). */}
+          {activeSection === "activity" && hasPerm(user?.role, "users.view") && (
+            <div className="space-y-6 animate-fade-in">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-surface-alt p-6 rounded-2xl border border-border shadow-sm">
+                <div>
+                  <h3 className="text-xl font-bold text-fg flex items-center gap-2">
+                    <Activity className="w-6 h-6 text-emerald-500" /> লগইন অ্যাক্টিভিটি ট্র্যাকিং
+                  </h3>
+                  <p className="text-xs text-fg-muted mt-1">
+                    কে কখন লগইন করেছে, কখন বের হয়েছে এবং কতক্ষণ অ্যাকটিভ ছিল।
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {[1, 7, 30].map((d) => (
+                    <button
+                      key={d}
+                      onClick={() => { setActivityDays(d); void fetchMemberActivity(d); }}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors ${
+                        activityDays === d
+                          ? "bg-emerald-600 text-white"
+                          : "bg-surface-hover text-fg-muted hover:bg-zinc-200 dark:hover:bg-zinc-700"
+                      }`}
+                    >
+                      {d === 1 ? "আজ/২৪ ঘণ্টা" : `${enToBnNumber(d)} দিন`}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => void fetchMemberActivity(activityDays)}
+                    className="px-3.5 py-2 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 font-medium text-xs rounded-xl hover:bg-blue-100 transition-colors"
+                  >
+                    রিফ্রেশ
+                  </button>
+                </div>
+              </div>
+
+              {/* Summary strip */}
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                {[
+                  { label: "মোট সেশন", value: memberActivity?.totals.sessions ?? 0, tone: "text-blue-600 dark:text-blue-400", box: "border-blue-200/60 dark:border-blue-900/40" },
+                  { label: "সক্রিয় সদস্য", value: memberActivity?.totals.members ?? 0, tone: "text-purple-600 dark:text-purple-400", box: "border-purple-200/60 dark:border-purple-900/40" },
+                  { label: "এখন অ্যাকটিভ", value: memberActivity?.totals.activeNow ?? 0, tone: "text-emerald-600 dark:text-emerald-400", box: "border-emerald-200/60 dark:border-emerald-900/40" },
+                  { label: "ইভেন্ট", value: memberActivity?.totals.events ?? 0, tone: "text-amber-600 dark:text-amber-400", box: "border-amber-200/60 dark:border-amber-900/40" },
+                ].map((item) => (
+                  <div key={item.label} className={`rounded-2xl border ${item.box} bg-surface-alt p-4 shadow-xs`}>
+                    <p className="text-xs font-semibold text-fg-muted truncate">{item.label}</p>
+                    <p className={`mt-1.5 text-2xl font-black tabular-nums ${item.tone}`}>
+                      {enToBnNumber(item.value)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Per-member leaderboard */}
+              {memberActivity && memberActivity.members.length > 0 ? (
+                <div className="bg-surface-alt rounded-2xl border border-border shadow-sm overflow-hidden">
+                  <div className="px-5 py-3 border-b border-border">
+                    <h4 className="text-sm font-bold text-fg">সদস্য অনুযায়ী মোট অ্যাকটিভ সময়</h4>
+                  </div>
+                  <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                    {memberActivity.members.slice(0, 8).map((member: any, index: number) => (
+                      <div key={member.userId} className="px-5 py-3 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className="w-6 h-6 rounded-full bg-surface-hover text-fg-muted text-[11px] font-bold flex items-center justify-center shrink-0">
+                            {enToBnNumber(index + 1)}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-fg truncate">{member.username}</p>
+                            <p className="text-[11px] text-fg-subtle">
+                              {enToBnNumber(member.sessions)}টি সেশন · {member.role}
+                            </p>
+                          </div>
+                        </div>
+                        <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 shrink-0 tabular-nums">
+                          {formatDurationBn(member.totalSeconds)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Session timeline */}
+              <div className="bg-surface-alt rounded-2xl border border-border shadow-sm overflow-hidden divide-y divide-zinc-200 dark:divide-zinc-800">
+                {loadingActivity && !memberActivity ? (
+                  <div className="p-12 text-center text-sm text-fg-muted animate-pulse">লোড হচ্ছে...</div>
+                ) : !memberActivity || memberActivity.sessions.length === 0 ? (
+                  <div className="p-12 text-center text-sm text-fg-muted">
+                    এই সময়ে কোনো লগইন রেকর্ড নেই। ট্র্যাকিং এখন থেকে শুরু হয়েছে — নতুন লগইন হলেই এখানে দেখা যাবে।
+                  </div>
+                ) : (
+                  memberActivity.sessions.map((session: any) => (
+                    <div key={`${session.userId}-${session.loginAt}`} className="p-4 sm:p-5 hover:bg-surface-hover transition-colors flex items-start justify-between gap-4 flex-wrap">
+                      <div className="space-y-1.5 min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold rounded-md uppercase bg-surface-hover text-fg">
+                            <Activity className="w-3 h-3" /> {session.role}
+                          </span>
+                          <span className="font-bold text-fg text-sm truncate">{session.username}</span>
+                          {session.closedBy === "open" ? (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+                              এখনও অ্যাকটিভ
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="flex items-center gap-3 text-[11.5px] text-fg-muted flex-wrap">
+                          <span>লগইন: <strong className="text-fg">{bndSafe(session.loginAt, "datetime")}</strong></span>
+                          <span>
+                            লগআউট:{" "}
+                            <strong className="text-fg">
+                              {session.logoutAt ? bndSafe(session.logoutAt, "datetime") : "—"}
+                            </strong>
+                          </span>
+                          <span>
+                            সময়:{" "}
+                            <strong className={session.durationSeconds == null ? "text-emerald-600 dark:text-emerald-400" : "text-fg"}>
+                              {session.durationSeconds == null ? "চলছে…" : formatDurationBn(session.durationSeconds)}
+                            </strong>
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-fg-subtle">
+                          {session.userAgent || "ডিভাইস অজানা"}
+                          {session.ip ? ` · IP ${session.ip}` : ""}
+                          {session.closedBy === "next_login" ? " · লগআউট না করে আবার লগইন" : ""}
+                        </p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+
           {/* VERIFICATION REQUESTS SECTION */}
           {activeSection === "verify" && hasPerm(user?.role, "users.view") && (
             <div className="space-y-6">
@@ -3110,6 +3283,31 @@ return (
                     {copied ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
                   </button>
                 </div>
+              </div>
+
+              {/* Manual-email helpers: the admin sends this themselves, so the
+                  whole message must be copyable, not just the URL. */}
+              <div className="pt-3 border-t border-border space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-fg-muted">ইমেইল সাবজেক্ট:</span>
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(resetModalData.emailSubject || ""); setCopiedSubject(true); setTimeout(() => setCopiedSubject(false), 2000); }}
+                    className="px-2 py-1 rounded-md bg-surface-alt border border-border text-fg-muted hover:text-blue-600 text-[11px] font-sans font-semibold"
+                  >
+                    {copiedSubject ? "কপি হয়েছে!" : "কপি"}
+                  </button>
+                </div>
+                <p className="break-words">{resetModalData.emailSubject}</p>
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <span className="text-fg-muted">সম্পূর্ণ ইমেইল বডি:</span>
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(resetModalData.emailBody || ""); setCopiedBody(true); setTimeout(() => setCopiedBody(false), 2000); }}
+                    className="px-2 py-1 rounded-md bg-surface-alt border border-border text-fg-muted hover:text-blue-600 text-[11px] font-sans font-semibold"
+                  >
+                    {copiedBody ? "কপি হয়েছে!" : "বডি কপি"}
+                  </button>
+                </div>
+                <p className="whitespace-pre-wrap break-words max-h-32 overflow-y-auto font-sans leading-5">{resetModalData.emailBody}</p>
               </div>
             </div>
 

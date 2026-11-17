@@ -11,6 +11,7 @@ import {
   MessageSquare,
   Flag,
   Users,
+  Activity,
   UserPlus,
   UserCheck,
   BadgeCheck,
@@ -39,14 +40,6 @@ import { UserAvatar } from "@/components/UserAvatar";
 export interface AdminSidebarBadges {
   pendingReviews?: number;
   unreadNotifications?: number;
-  /**
-   * Total notifications in this admin's scope (read + unread). The
-   * notifications nav item falls back to it whenever nothing is unread —
-   * without this the badge vanished the moment everything was read, so the
-   * admin could only learn that notifications existed by opening the
-   * section (the reported problem).
-   */
-  totalNotifications?: number;
   unreadMessages?: number;
   pendingVerifications?: number;
   pendingApplications?: number;
@@ -207,6 +200,14 @@ const NAV_GROUPS: NavGroup[] = [
         label: "ইউজার ম্যানেজমেন্ট",
         icon: Users,
         href: "/admin/users",
+        permission: "users.view",
+      },
+      {
+        id: "activity",
+        label: "লগইন অ্যাক্টিভিটি",
+        icon: Activity,
+        section: "activity",
+        href: "/admin?section=activity",
         permission: "users.view",
       },
       {
@@ -573,23 +574,22 @@ export function AdminSidebar({
             <ExternalLink className="w-4 h-4 text-fg-muted" />
           </Link>
           {(() => {
+            // Header bell — unread only. It used to fall back to the TOTAL
+            // notification count and kept showing a number after everything
+            // was read, which looked like pending work.
             const unread = badges.unreadNotifications || 0;
-            const total = badges.totalNotifications || 0;
-            if (unread <= 0 && total <= 0) return null;
+            if (unread <= 0) return null;
             return (
               <Link
                 href="/admin?section=notifications"
-                title={unread > 0 ? `${enToBnNumber(unread)}টি অপঠিত` : `${enToBnNumber(total)}টি নোটিফিকেশন — সবগুলো পড়া হয়েছে`}
+                title={`${enToBnNumber(unread)}টি অপঠিত`}
                 className="relative p-2 rounded-xl bg-surface border border-border text-fg"
               >
                 <Bell className="w-4 h-4 text-rose-500" />
-                {unread > 0 ? (
-                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full animate-ping" />
-                ) : (
-                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 bg-rose-600/80 text-white text-[9px] font-bold rounded-full flex items-center justify-center leading-none">
-                    {enToBnNumber(total)}
-                  </span>
-                )}
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full animate-ping" />
+                <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 bg-rose-600 text-white text-[9px] font-bold rounded-full flex items-center justify-center leading-none">
+                  {enToBnNumber(unread)}
+                </span>
               </Link>
             );
           })()}

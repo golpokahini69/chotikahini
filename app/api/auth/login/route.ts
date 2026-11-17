@@ -5,6 +5,7 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { setSession } from "@/lib/auth";
 import { safeIdentifier } from "@/lib/utils";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
+import { recordAuthEvent } from "@/lib/auth-tracking";
 
 export async function POST(req: Request) {
   try {
@@ -96,6 +97,9 @@ export async function POST(req: Request) {
         }
       } catch {}
 
+      // Session-tracking event for the admin panel ("who logged in when").
+      await recordAuthEvent(req, "login", { id: adminId, username: envAdminUser, role: "superadmin" });
+
       return NextResponse.json({
         success: true,
         user: {
@@ -145,6 +149,9 @@ export async function POST(req: Request) {
     try {
       await supabase.from("users").update({ last_seen_at: new Date().toISOString() }).eq("id", dbUser.id);
     } catch {}
+
+    // Session-tracking event for the admin panel ("who logged in when").
+    await recordAuthEvent(req, "login", { id: dbUser.id, username: dbUser.username, role: computedRole });
 
     return NextResponse.json({
       success: true,
