@@ -15,7 +15,9 @@ export async function GET() {
     const supabase = getSupabaseAdmin();
     const { data: comments, error } = await supabase
       .from("comments")
-      .select("*")
+      // Exactly the fields the response maps (see `enriched` below) — skips
+      // post_id, target_type, target_id, is_pinned, is_spoiler, updated_at.
+      .select("id, post_slug, user_id, username, name, profile_pic, content, parent_comment_id, status, created_at")
       .eq("user_id", session.id)
       .order("created_at", { ascending: false });
 

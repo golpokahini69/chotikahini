@@ -63,10 +63,13 @@ export async function PUT(req: Request) {
 
     const supabase = getSupabaseAdmin();
     
-    // Fetch current user
+    // Fetch current user — only the four fields this handler reads
+    // (role, username, name, is_verified). `*` pulled password_hash,
+    // reset_token, saved_posts and bio across PostgREST on every admin
+    // update for a row whose extra fields are never examined.
     const { data: user, error: fetchError } = await supabase
       .from("users")
-      .select("*")
+      .select("id, username, name, role, is_verified")
       .eq("id", userId)
       .single();
 

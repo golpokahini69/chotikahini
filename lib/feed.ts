@@ -1,9 +1,14 @@
 /**
  * RSS / Atom feed discovery and parsing.
  *
- * Used by the crawler to import articles from feeds instead of relying
- * solely on homepage link extraction (which often misses or picks wrong
- * links on Bengali choti sites).
+ * RETIRED — nothing imports this module since the "অটো পোস্ট ও স্মার্ট
+ * ক্রলার" feature was removed (its consumer was `/api/admin/crawler/run`,
+ * which is deleted). It is dead code and never reaches a browser bundle,
+ * but it is left in place until the removal has been verified in
+ * production, after which it can simply be deleted.
+ *
+ * Kept for reference: feed discovery mattered only for scraping other
+ * authors' feeds, which is no longer something this app does.
  */
 
 export interface FeedEntry {

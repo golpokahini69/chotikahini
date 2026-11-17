@@ -30,10 +30,14 @@ export async function PUT(req: Request) {
 
     const supabase = getSupabaseAdmin();
     
-    // Get current user from DB
+    // Get current user from DB — only the fields this handler touches
+    // (profile fields, plus password_hash for the change-password check and
+    // saved_posts/role/created_at for the session payload below). `*` pulled
+    // reset_token, xp, last_seen_at, can_post and every other column across
+    // PostgREST on every profile update.
     const { data: user, error: fetchError } = await supabase
       .from("users")
-      .select("*")
+      .select("id, username, name, email, profile_pic, bio, created_at, role, saved_posts, password_hash")
       .eq("id", session.id)
       .single();
 

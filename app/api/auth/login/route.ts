@@ -40,7 +40,11 @@ export async function POST(req: Request) {
     const supabase = getSupabaseAdmin();
     const { data: users, error: dbError } = await supabase
       .from('users')
-      .select('*')
+      // Only the columns this handler reads. `*` used to pull bio, xp,
+      // last_seen_at, can_post, updated_at and — notably — `reset_token` /
+      // `reset_token_expires` and `password_hash` over PostgREST on every
+      // login attempt, even though only 10 fields are ever used below.
+      .select('id, username, name, email, profile_pic, role, is_verified, saved_posts, created_at, password_hash')
       .or(`username.ilike.${safeLoginId},email.ilike.${safeLoginId}`)
       .limit(1);
 

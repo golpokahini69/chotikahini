@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { getVisitorId } from "@/lib/client-visitor-id";
 
 /**
  * Fires this site's own view counter for a gallery.
@@ -22,6 +23,9 @@ export function PictureViewTracker({ galleryId }: { galleryId: string }) {
       method: "POST",
       keepalive: true,
       headers: { "Content-Type": "application/json" },
+      // Same stable id the story counter uses, so a proxy-hidden IP cannot
+      // collapse every visitor into one dedupe bucket.
+      body: JSON.stringify({ visitorId: getVisitorId() }),
     }).catch(() => {
       // A failed view ping is never worth surfacing to the visitor.
     });

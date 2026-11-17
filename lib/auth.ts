@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { jwtVerify, SignJWT } from "jose";
 import { cookies } from "next/headers";
 import { NextRequest } from "next/server";
@@ -100,13 +101,23 @@ export async function clearSession() {
 }
 
 /**
- * Verifies the JWT and returns the payload if valid with live DB role.
+ * Verify + hydrate, memoised per request on the token string.
+ *
+ * Route handlers call `getSession()` several times in one request (the
+ * comments route alone calls it 4×), and every call used to re-verify the
+ * JWT and re-read the user row from PostgREST — so ONE API request could
+ * cost four database round-trips for a logged-in user.
+ *
+ * React's `cache()` is scoped to the current request, so:
+ *   • within a request → one jwtVerify + one `users` read, shared by all
+ *     callers of getSession();
+ *   • across requests  → a fresh result, so role changes still take effect
+ *     immediately (the entire reason hydrateSessionUser exists).
+ *
+ * The same `cache()` already backs `getAllPostsAsync` in this app's route
+ * handlers, so request-scoping here is proven, not assumed.
  */
-export async function getSession(): Promise<UserSessionPayload | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("user_session")?.value;
-  if (!token) return null;
-
+const verifyAndHydrate = cache(async (token: string): Promise<UserSessionPayload | null> => {
   try {
     const { payload } = await jwtVerify(token, encodedSecret);
     const base = payload as unknown as UserSessionPayload;
@@ -114,6 +125,17 @@ export async function getSession(): Promise<UserSessionPayload | null> {
   } catch (error) {
     return null;
   }
+});
+
+/**
+ * Verifies the JWT and returns the payload if valid with live DB role.
+ * Deduplicated per request on the token — see verifyAndHydrate above.
+ */
+export async function getSession(): Promise<UserSessionPayload | null> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get("user_session")?.value;
+  if (!token) return null;
+  return verifyAndHydrate(token);
 }
 
 /**

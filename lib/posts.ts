@@ -575,11 +575,62 @@ export function getAllPosts(_options?: { includeFuture?: boolean; includePending
   return cachedPosts || [];
 }
 
+/**
+ * Identifier → Post lookup, memoised per memoised posts array.
+ *
+ * `getPostBySlugSync`, `getPostBySlugAsync` and the comments publication
+ * gate all resolved a story by running `.find()` with four string
+ * comparisons per element — O(4N) per call over the whole catalogue
+ * (240+ stories today), on every story render and every comment request.
+ *
+ * This builds the same map once per posts array (the arrays are memoised in
+ * `computedPostsCache`, so a WeakMap keys it for free) and answers in O(1).
+ *
+ * Keys are EXACTLY the expressions the old `.find()` compared against —
+ * `slug` and `uid` lower-cased with no trim, `fileSlug` lower-cased, and
+ * `title` lower-cased AND trimmed — and insertion is first-wins, which is
+ * what `.find()` returns when two stories share a title. Behaviour is
+ * therefore identical; only the cost changes.
+ */
+const postsByIdentifier = new WeakMap<readonly Post[], Map<string, Post>>();
+
+export function getPostLookup(posts: readonly Post[]): Map<string, Post> {
+  const cached = postsByIdentifier.get(posts);
+  if (cached) return cached;
+
+  const map = new Map<string, Post>();
+  const add = (key: string | null | undefined, post: Post) => {
+    if (!key) return;
+    // First-wins: mirrors `posts.find(...)` returning the earliest match.
+    if (!map.has(key)) map.set(key, post);
+  };
+
+  for (const post of posts) {
+    add(post.slug?.toLowerCase(), post);
+    add(post.uid?.toLowerCase(), post);
+    add(post.fileSlug?.toLowerCase(), post);
+    add(post.title?.toLowerCase().trim(), post);
+  }
+
+  postsByIdentifier.set(posts, map);
+  return map;
+}
+
+/** Normalises a caller-supplied slug/uid/title/url into a lookup key. */
+function identifierKey(raw: string): string {
+  return (raw || "")
+    .replace(/^https?:\/\/[^\/]+\//, "")
+    .replace(/^\//, "")
+    .replace(/\.mdx$/i, "")
+    .toLowerCase()
+    .trim();
+}
+
 export function getPostBySlugSync(slug: string): Post | null {
   const posts = getAllPosts({ includeFuture: true, includePending: true });
-  const q = (slug || "").replace(/^https?:\/\/[^\/]+\//, "").replace(/^\//, "").replace(/\.mdx$/i, "").toLowerCase().trim();
+  const q = identifierKey(slug);
   if (!q) return null;
-  return posts.find((p) => p.slug.toLowerCase() === q || p.uid?.toLowerCase() === q || p.fileSlug.toLowerCase() === q || p.title.toLowerCase().trim() === q) || null;
+  return getPostLookup(posts).get(q) || null;
 }
 
 export function getPostBySlug(slug: string): Post | null {
@@ -721,9 +772,9 @@ export async function getPostContentsBulkAsync(
 
 export async function getPostBySlugAsync(slug: string): Promise<Post | null> {
   const posts = await getAllPostsAsync({ includeFuture: true, includePending: true });
-  const q = (slug || "").replace(/^https?:\/\/[^\/]+\//, "").replace(/^\//, "").replace(/\.mdx$/i, "").toLowerCase().trim();
+  const q = identifierKey(slug);
   if (!q) return null;
-  const found = posts.find((p) => p.slug.toLowerCase() === q || p.uid?.toLowerCase() === q || p.fileSlug.toLowerCase() === q || p.title.toLowerCase().trim() === q) || null;
+  const found = getPostLookup(posts).get(q) || null;
   if (!found) return null;
 
   // Copy before attaching the body: `posts` is a shared, memoised array (see

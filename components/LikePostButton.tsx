@@ -17,7 +17,14 @@ export function LikePostButton({ postSlug }: { postSlug: string }) {
   useEffect(() => {
     async function fetchLikes() {
       try {
-        const res = await fetch(`/api/likes?slug=${postSlug}`);
+        // Anonymous readers take the shared, edge-cached answer (`liked` is
+        // always false for them, so it is identical for everyone). A logged-in
+        // reader adds `me=1`, which the server answers privately — and which
+        // re-fires once auth resolves, so the correct liked-state replaces it.
+        const wantsState = !!user;
+        const res = await fetch(
+          `/api/likes?slug=${encodeURIComponent(postSlug)}${wantsState ? "&me=1" : ""}`,
+        );
         if (res.ok) {
           const data = await res.json();
           setCount(typeof data.count === "number" ? data.count : 0);
@@ -30,7 +37,7 @@ export function LikePostButton({ postSlug }: { postSlug: string }) {
       }
     }
     fetchLikes();
-  }, [postSlug]);
+  }, [postSlug, user]);
 
   const toggleLike = async () => {
     if (!user) {

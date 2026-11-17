@@ -10,7 +10,7 @@ import {
   ShieldAlert, MessageSquare, Menu, X, UserCog, CheckCircle2, 
   AlertCircle, EyeOff, Eye, Clock, Users, FileCheck, RotateCcw, Send, Filter,
   Activity, Calendar, TrendingUp, UserCheck, Mail, Bell, Flag, UserPlus, KeyRound, Copy, BadgeCheck,
-  AlertTriangle, ExternalLink, Globe, Loader2, PenLine, Rss
+  AlertTriangle, ExternalLink, Loader2, PenLine, Rss
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { enToBnNumber, bndSafe } from "@/lib/utils";
@@ -69,14 +69,14 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
 
   // Role-aware landing section: each admin role starts at the panel that fits its job.
   const role = user?.role;
-  const [activeSection, setActiveSection] = useState<"dashboard" | "review" | "authors" | "messages" | "notifications" | "verify" | "deletions" | "similarity" | "autopost">(
+  const [activeSection, setActiveSection] = useState<"dashboard" | "review" | "authors" | "messages" | "notifications" | "verify" | "deletions" | "similarity">(
     role === "content_manager" ? "review" : "dashboard"
   );
   const searchParams = useSearchParams();
 
   useEffect(() => {
     const sec = searchParams?.get("section");
-    if (sec && ["dashboard", "review", "authors", "messages", "notifications", "verify", "deletions", "similarity", "autopost"].includes(sec)) {
+    if (sec && ["dashboard", "review", "authors", "messages", "notifications", "verify", "deletions", "similarity"].includes(sec)) {
       setActiveSection(sec as any);
       if (sec === "messages") fetchContactMessages();
       if (sec === "notifications") fetchAdminNotifications();
@@ -387,38 +387,6 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
 
   // Story similarity map (uid -> { maxSimilarity, matched })
   const [similarityMap, setSimilarityMap] = useState<Record<string, any>>({});
-  // Auto post state
-  const [autoPostUrl, setAutoPostUrl] = useState("");
-  const [autoPostCategory, setAutoPostCategory] = useState("golpo");
-  const [autoPostTags, setAutoPostTags] = useState("");
-  const [autoPostSchedule, setAutoPostSchedule] = useState("");
-  const [autoPostLoading, setAutoPostLoading] = useState(false);
-  const [autoPostMsg, setAutoPostMsg] = useState<{ type: string; text: string }>({ type: "", text: "" });
-  // Crawler sources state
-  const [crawlerSources, setCrawlerSources] = useState<any[]>([]);
-  const [newSourceUrl, setNewSourceUrl] = useState("");
-  const [newSourceCategory, setNewSourceCategory] = useState("golpo");
-  const [newSourceTags, setNewSourceTags] = useState("");
-  const [crawling, setCrawling] = useState(false);
-  const [crawlerMsg, setCrawlerMsg] = useState<{ type: string; text: string }>({ type: "", text: "" });
-  // Crawled review queue state
-  const [crawledStories, setCrawledStories] = useState<any[]>([]);
-  const [selectedCrawled, setSelectedCrawled] = useState<Set<string>>(new Set());
-  const [publishing, setPublishing] = useState(false);
-  const [editingTagsFor, setEditingTagsFor] = useState<string | null>(null);
-  const [editTagsValue, setEditTagsValue] = useState("");
-  const [schedulingFor, setSchedulingFor] = useState<string | null>(null);
-  const [scheduleTimeValue, setScheduleTimeValue] = useState("");
-  const [publishInterval, setPublishInterval] = useState(60);
-  // Full edit modal state
-  const [editingStory, setEditingStory] = useState<any | null>(null);
-  const [editTitle, setEditTitle] = useState("");
-  const [editCategory, setEditCategory] = useState("golpo");
-  const [editTags, setEditTags] = useState("");
-  const [editAuthor, setEditAuthor] = useState("");
-  const [editContent, setEditContent] = useState("");
-  const [editLoading, setEditLoading] = useState(false);
-  const [authorsList, setAuthorsList] = useState<any[]>([]);
   // Per-story analytics modal
   const [analyticsStory, setAnalyticsStory] = useState<{ uid: string; title: string } | null>(null);
 
@@ -570,8 +538,6 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
     fetchAdminNotifications();
     fetchWelcomeRecipients();
     fetchStorySimilarity();
-    fetchCrawlerSources();
-    fetchCrawledStories();
 
     // Live-refresh badges (notifications, deletion requests, messages,
     // pending reviews, verification) every 30s so sidebar counts update
@@ -724,161 +690,6 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
     } catch (e) {}
   };
 
-  const fetchCrawlerSources = async () => {
-    try {
-      const res = await fetch("/api/admin/crawler/sources");
-      if (res.ok) {
-        const json = await res.json();
-        setCrawlerSources(json.sources || []);
-      }
-    } catch {}
-  };
-
-  const fetchCrawledStories = async () => {
-    try {
-      const res = await fetch("/api/admin/crawler/publish");
-      if (res.ok) {
-        const json = await res.json();
-        setCrawledStories(json.stories || []);
-        if (json.config?.intervalMinutes) setPublishInterval(json.config.intervalMinutes);
-        if (json.autoPublished) {
-          setCrawlerMsg({ type: "success", text: `"${json.autoPublished}" প্রকাশিত হয়েছে।` });
-        }
-      }
-    } catch {}
-  };
-
-  const setScheduleInterval = async () => {
-    setCrawlerMsg({ type: "", text: "" });
-    try {
-      const res = await fetch("/api/admin/crawler/publish", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "schedule", intervalMinutes: publishInterval }),
-      });
-      const json = await res.json();
-      setCrawlerMsg(json.success ? { type: "success", text: json.message } : { type: "error", text: json.error || "শিডিউল ব্যর্থ।" });
-    } catch { setCrawlerMsg({ type: "error", text: "নেটওয়ার্ক সমস্যা।" }); }
-  };
-
-  const toggleCrawled = (uid: string) => {
-    setSelectedCrawled(prev => { const n = new Set(prev); if (n.has(uid)) n.delete(uid); else n.add(uid); return n; });
-  };
-
-  const publishCrawled = async (mode: "all" | "selected" | "one", uids?: string[]) => {
-    setPublishing(true);
-    setCrawlerMsg({ type: "", text: "" });
-    try {
-      const res = await fetch("/api/admin/crawler/publish", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, uids }),
-      });
-      const json = await res.json();
-      if (res.ok) {
-        setCrawlerMsg({ type: "success", text: json.message });
-        setSelectedCrawled(new Set());
-        fetchCrawledStories();
-        fetchStats();
-        router.refresh();
-      } else {
-        setCrawlerMsg({ type: "error", text: json.error || "পাবলিশ ব্যর্থ।" });
-      }
-    } catch { setCrawlerMsg({ type: "error", text: "নেটওয়ার্ক সমস্যা।" }); }
-    finally { setPublishing(false); }
-  };
-
-  const saveCrawledEdit = async (uid: string, tags: string) => {
-    try {
-      await fetch("/api/admin/crawler/publish", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uid, tags }),
-      });
-      setEditingTagsFor(null);
-      fetchCrawledStories();
-    } catch {}
-  };
-
-  const scheduleCrawledPost = async (uid: string) => {
-    if (!scheduleTimeValue) { setCrawlerMsg({ type: "error", text: "তারিখ/সময় দিন।" }); return; }
-    try {
-      const res = await fetch("/api/admin/crawler/publish", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uid, scheduledAt: new Date(scheduleTimeValue).toISOString() }),
-      });
-      const json = await res.json();
-      if (res.ok) {
-        setCrawlerMsg({ type: "success", text: `শিডিউল করা হয়েছে — ${bndSafe(scheduleTimeValue, "datetime")} এ প্রকাশ হবে।` });
-        setSchedulingFor(null);
-        setScheduleTimeValue("");
-        fetchCrawledStories();
-      } else {
-        setCrawlerMsg({ type: "error", text: json.error || "শিডিউল ব্যর্থ।" });
-      }
-    } catch {}
-  };
-
-  const deleteCrawledStory = async (uid: string, title: string) => {
-    if (!confirm(`"${title}" গল্পটি ডিলিট করবেন?`)) return;
-    try {
-      const res = await fetch(`/api/admin/crawler/publish?uid=${encodeURIComponent(uid)}`, { method: "DELETE" });
-      if (res.ok) {
-        setCrawlerMsg({ type: "success", text: `"${title}" ডিলিট হয়েছে।` });
-        setSelectedCrawled(prev => { const n = new Set(prev); n.delete(uid); return n; });
-        fetchCrawledStories();
-      }
-    } catch {}
-  };
-
-  const openStoryEdit = async (story: any) => {
-    setEditingStory(story);
-    setEditTitle(story.title || "");
-    setEditCategory(story.category || "golpo");
-    setEditTags(Array.isArray(story.tags) ? story.tags.join(", ") : story.tags || "");
-    setEditAuthor(story.authorId || "");
-    setEditContent("");
-    setEditLoading(true);
-    // Load authors list for the author dropdown
-    try {
-      const aRes = await fetch("/api/admin/authors");
-      if (aRes.ok) { const j = await aRes.json(); setAuthorsList(j.authors || []); }
-    } catch {}
-    // Load full content
-    try {
-      const cRes = await fetch(`/api/author/story-content?uid=${encodeURIComponent(story.uid)}`);
-      if (cRes.ok) { const j = await cRes.json(); setEditContent(j.story?.content || ""); }
-    } catch {}
-    setEditLoading(false);
-  };
-
-  const saveStoryEdit = async () => {
-    if (!editingStory) return;
-    try {
-      const res = await fetch("/api/admin/crawler/publish", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          uid: editingStory.uid,
-          title: editTitle,
-          category: editCategory,
-          tags: editTags,
-          authorId: editAuthor,
-          content: editContent,
-        }),
-      });
-      const json = await res.json();
-      if (res.ok) {
-        setCrawlerMsg({ type: "success", text: "গল্পটি আপডেট হয়েছে।" });
-        setEditingStory(null);
-        fetchCrawledStories();
-      } else {
-        setCrawlerMsg({ type: "error", text: json.error || "আপডেট ব্যর্থ।" });
-      }
-    } catch {}
-  };
-
   const addCoauthor = async () => {
     if (!reviewStory?.uid) return;
     const value = coauthorInput.trim();
@@ -940,85 +751,6 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
       setCoauthorMsg({ type: "error", text: "নেটওয়ার্ক সমস্যা।" });
     } finally {
       setCoauthorBusy(false);
-    }
-  };
-
-  const addCrawlerSource = async () => {
-    if (!newSourceUrl.trim()) return;
-    setCrawlerMsg({ type: "", text: "" });
-    try {
-      const res = await fetch("/api/admin/crawler/sources", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: newSourceUrl.trim(), category: newSourceCategory, default_tags: newSourceTags }),
-      });
-      const json = await res.json();
-      if (res.ok) {
-        setCrawlerMsg({ type: "success", text: "সোর্স যোগ হয়েছে!" });
-        setNewSourceUrl(""); setNewSourceTags("");
-        fetchCrawlerSources();
-      } else {
-        setCrawlerMsg({ type: "error", text: json.error || "সোর্স যোগ ব্যর্থ।" });
-      }
-    } catch { setCrawlerMsg({ type: "error", text: "নেটওয়ার্ক সমস্যা।" }); }
-  };
-
-  const deleteCrawlerSource = async (id: string) => {
-    if (!confirm("এই সোর্সটি সরাবেন?")) return;
-    try {
-      await fetch(`/api/admin/crawler/sources?id=${id}`, { method: "DELETE" });
-      fetchCrawlerSources();
-    } catch {}
-  };
-
-  const runCrawler = async () => {
-    setCrawling(true);
-    setCrawlerMsg({ type: "", text: "" });
-    try {
-      const res = await fetch("/api/admin/crawler/run", { method: "POST" });
-      const json = await res.json();
-      if (res.ok) {
-        setCrawlerMsg({ type: "success", text: json.message || `${json.posted}টি পোস্ট হয়েছে।` });
-        fetchStats();
-        fetchAllStoriesForReview();
-        router.refresh();
-      } else {
-        setCrawlerMsg({ type: "error", text: json.error || "ক্রল ব্যর্থ।" });
-      }
-    } catch { setCrawlerMsg({ type: "error", text: "ক্রল করতে সমস্যা।" }); }
-    finally { setCrawling(false); }
-  };
-
-  const handleAutoPost = async () => {
-    if (!autoPostUrl.trim()) return;
-    setAutoPostLoading(true);
-    setAutoPostMsg({ type: "", text: "" });
-    try {
-      const res = await fetch("/api/admin/auto-post", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: autoPostUrl.trim(),
-          category: autoPostCategory,
-          tags: autoPostTags,
-          scheduledAt: autoPostSchedule ? new Date(autoPostSchedule).toISOString() : undefined,
-        }),
-      });
-      const json = await res.json();
-      if (res.ok && json.success) {
-        setAutoPostMsg({ type: "success", text: json.message });
-        setAutoPostUrl("");
-        setAutoPostSchedule("");
-        fetchStats();
-        fetchAllStoriesForReview();
-        router.refresh();
-      } else {
-        setAutoPostMsg({ type: "error", text: json.error || "অটো-পোস্ট ব্যর্থ।" });
-      }
-    } catch {
-      setAutoPostMsg({ type: "error", text: "নেটওয়ার্ক সমস্যা হয়েছে।" });
-    } finally {
-      setAutoPostLoading(false);
     }
   };
 
@@ -1139,7 +871,6 @@ return (
                 {activeSection === "notifications" && "অ্যাডমিন নোটিফিকেশন সেন্টার"}
                 {activeSection === "verify" && "লেখক ভেরিফিকেশন রিকোয়েস্ট"}
                 {activeSection === "deletions" && "ডিলিট রিকোয়েস্ট (স্থায়ী মুছে ফেলা)"}
-                {activeSection === "autopost" && "অটো পোস্ট ও স্মার্ট ক্রলার"}
                 {activeSection === "similarity" && "ডুপ্লিকেট স্টোরি স্ক্যানার"}
                 {activeSection === "messages" && "ব্যবহারকারীদের যোগাযোগ বার্তা"}
               </h2>
@@ -1150,7 +881,6 @@ return (
                 {activeSection === "notifications" && "নতুন ইউজার নিবন্ধন, পাসওয়ার্ড রিসেট ও জরুরি সাইট নোটিফিকেশন।"}
                 {activeSection === "verify" && "লেখকদের ব্লু ভেরিফাইড ব্যাজ আবেদন অনুমোদন বা প্রত্যাখ্যান করুন।"}
                 {activeSection === "deletions" && "অ্যাডমিনদের পাঠানো স্থায়ী ডিলিট রিকোয়েস্ট অনুমোদন করুন।"}
-                {activeSection === "autopost" && "বাহ্যিক ওয়েবসাইট থেকে স্বয়ংক্রিয়ভাবে গল্প সংগ্রহ ও ড্রাফট তৈরি করুন।"}
                 {activeSection === "similarity" && "বিদ্যমান গল্পগুলোর মধ্যে মিল বা কপি হওয়া কন্টেন্ট স্বয়ংক্রিয়ভাবে শনাক্ত করুন।"}
                 {activeSection === "messages" && "কন্টাক্ট ফর্ম থেকে পাঠানো সমস্ত বার্তা পর্যালোচনা ও উত্তর প্রদান করুন।"}
               </p>

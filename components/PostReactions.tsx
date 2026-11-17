@@ -26,13 +26,19 @@ export function PostReactions({ postSlug }: Props) {
   const [reactions, setReactions] = useState<Record<string, { count: number; reacted: boolean }>>({});
 
   const fetchReactions = useCallback(() => {
-    fetch(`/api/reactions?slug=${encodeURIComponent(postSlug)}`)
+    // Anonymous: shared edge-cached counts (reacted is always false for
+    // everyone, so the bytes are identical). Logged-in: `me=1` asks the
+    // server privately for this viewer's reacted-flags.
+    const wantsState = !!user;
+    fetch(
+      `/api/reactions?slug=${encodeURIComponent(postSlug)}${wantsState ? "&me=1" : ""}`,
+    )
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d?.reactions) setReactions(d.reactions);
       })
       .catch(() => {});
-  }, [postSlug]);
+  }, [postSlug, user]);
 
   useEffect(() => {
     fetchReactions();

@@ -8,7 +8,6 @@ import {
   LayoutDashboard,
   FileCheck,
   PlusCircle,
-  Sparkles,
   MessageSquare,
   Flag,
   Users,
@@ -110,14 +109,6 @@ const NAV_GROUPS: NavGroup[] = [
         section: "similarity",
         href: "/admin?section=similarity",
         permission: "story.review",
-      },
-      {
-        id: "autopost",
-        label: "অটো পোস্ট ও ক্রলার",
-        icon: Sparkles,
-        section: "autopost",
-        href: "/admin?section=autopost",
-        permission: "content.create",
       },
       {
         id: "comments",

@@ -149,8 +149,26 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             id="google-tag-manager"
             strategy="afterInteractive"
             dangerouslySetInnerHTML={{
+              // Two quoting bugs made this snippet throw `ReferenceError: s is
+              // not defined` the moment it executed, so the admin panel loaded
+              // without GTM while the public site (RootShell) worked:
+              //
+              //   1. the 3rd argument was the bare identifier `s` instead of
+              //      the string 'script' — `s` is only a PARAMETER name
+              //      inside the IIFE, so referencing it as an argument looks
+              //      it up in the global scope and fails;
+              //   2. `${gtmId}` was unquoted, so 'GTM-XXXX' was parsed as an
+              //      identifier and would have thrown next.
+              //
+              // Now byte-for-byte the same shape as RootShell, which is the
+              // stock Google snippet.
               __html: `
-                (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,s,'dataLayer',${gtmId});`,
+                (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+                new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+                j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+                'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+                })(window,document,'script','dataLayer','${gtmId}');
+              `,
             }}
           />
         ) : null}

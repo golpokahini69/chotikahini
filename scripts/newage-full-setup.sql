@@ -746,19 +746,10 @@ create table if not exists public.announcements (
   updated_at timestamptz default now()
 );
 
--- External story domains watched by the auto-poster crawler.
-create table if not exists public.crawler_sources (
-  id              uuid default gen_random_uuid() primary key,
-  url             text not null,
-  category        text default 'golpo',
-  default_tags    text default '',
-  active          boolean default true,
-  last_crawled_at timestamptz,
-  created_at      timestamptz default now(),
-  feed_url        text,
-  unique (url)
-);
-
+-- `crawler_sources` (watched domains for the auto-poster) and the
+-- `crawler_config` site_settings row are GONE — the "অটো পোস্ট ও স্মার্ট
+-- ক্রলার" feature was removed along with its routes. Published stories that
+-- came from it are untouched.
 
 -- ============================================================================
 -- §12  VIDEO LIBRARY
@@ -1662,7 +1653,7 @@ $$;
 -- PUBLIC READ is granted only where the UI genuinely needs it:
 --   comments, post_likes, post_reactions, post_views,
 --   post_metadata, chat_messages, announcements, categories, site_settings,
---   crawler_sources, stories (published only)
+--   stories (published only)
 --
 -- Everything else — users, notifications, private_messages, conversations,
 -- reading_history, reports, and the whole admin surface — is
@@ -1680,7 +1671,7 @@ begin
     'user_follows','announcements','author_applications',
     'comment_reactions','reports',
     'story_coauthors','verification_requests','deletion_requests',
-    'admin_audit_logs','categories','site_settings','crawler_sources',
+    'admin_audit_logs','categories','site_settings',
     'stories','posts','posts_history','posts_likes','posts_reposts',
     'posts_comments','video_posts','video_views','picture_galleries',
     'picture_views','post_views_daily','share_suggestion_log',
@@ -1748,9 +1739,6 @@ drop policy if exists "Allow public read site_settings" on public.site_settings;
 create policy "Allow public read site_settings"
   on public.site_settings for select using (true);
 
-drop policy if exists "Allow public read crawler_sources" on public.crawler_sources;
-create policy "Allow public read crawler_sources"
-  on public.crawler_sources for select using (true);
 
 drop policy if exists "Allow public read video_views counts" on public.video_views;
 create policy "Allow public read video_views counts"
@@ -1816,7 +1804,7 @@ begin
     'verification_requests','deletion_requests','author_applications',
     'admin_audit_logs','comment_reactions','story_coauthors','user_follows',
     'post_metadata','post_views_daily','announcements','categories',
-    'site_settings','crawler_sources','stories','posts','posts_history',
+    'site_settings','stories','posts','posts_history',
     'posts_likes','posts_reposts','posts_comments','video_posts',
     'video_views','picture_galleries','picture_views',
     'share_suggestion_log','share_suggestion_daily'
@@ -1970,9 +1958,6 @@ INSERT INTO public.categories (id, name, icon, description, created_at) VALUES (
 ON CONFLICT DO NOTHING;
 -- site_settings
 INSERT INTO public.site_settings (key, value, updated_at) VALUES ('config', '{"seo": {"canonicalUrl": "https://chotikahini.vercel.app/", "organization": {"url": "https://chotikahini.vercel.app/"}}, "url": "https://chotikahini.vercel.app/", "title": "বাংলা চটি কাহিনী", "shortName": "বাচকা"}', '2026-09-04 20:24:55.123+00'), ('crawler_config', '{"lastPublishAt": "2026-08-24T22:48:28.981Z", "intervalMinutes": 60}', '2026-08-24 22:44:00.838209+00'), ('features', '{"videoSection": true}', '2026-10-20 17:49:14.651524+00')
-ON CONFLICT DO NOTHING;
--- crawler_sources
-INSERT INTO public.crawler_sources (id, url, category, default_tags, active, last_crawled_at, created_at, feed_url) VALUES ('b127dc63-4b63-4a05-9960-8c14f0d68122', 'https://bengalichotigolpo.com/', 'golpo', '', true, '2026-08-26 22:52:34.342+00', '2026-08-24 23:40:16.723873+00', null)
 ON CONFLICT DO NOTHING;
 -- announcements
 INSERT INTO public.announcements (id, text, active, color, link, created_by, updated_at) VALUES ('53313f21-cfa9-4f8c-8183-1bd137bf450b', 'নতুন ফিচারঃ এখন থেকে ইউজাররা সবাই পোস্ট করতে পারবেন।', true, 'red', '', null, '2026-09-04 05:53:22.663+00')
@@ -31692,24 +31677,6 @@ insert into public.categories (id, name, icon, description) values
   ('aloukik', 'অলৌকিক', 'feather', 'ভূত পরীদের নিয়ে গল্প')
 on conflict (id) do nothing;
 
--- The crawler schedule: publish one crawled story per hour.
---
--- ON CONFLICT DO UPDATE is deliberate here — the schedule row is a
--- single source of truth for the cron config, and the publish route
--- rewrites lastPublishAt on every run.
-insert into public.site_settings (key, value, updated_at)
-values (
-  'crawler_config',
-  jsonb_build_object(
-    'intervalMinutes', 60,
-    'lastPublishAt', to_char(now() - interval '61 minutes', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
-  ),
-  now()
-)
-on conflict (key) do update
-  set value = excluded.value,
-      updated_at = now();
-
 -- Add the "ছবি" (pictures) entry to the navigation if it is missing.
 --
 -- The site's nav is DB-backed (site_settings key `navigation`) and the DB
@@ -31764,6 +31731,10 @@ update public.site_settings
 -- ============================================================================
 -- §D  FINALISE
 -- ============================================================================
+
+-- The auto-post/crawler feature was removed, so its config key must not be
+-- seeded either (it came along with the site_settings rows in the export).
+delete from public.site_settings where key = 'crawler_config';
 
 -- Fill the normalised post_id columns from the slugs.
 select public.backfill_post_ids();

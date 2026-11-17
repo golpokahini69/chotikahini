@@ -3,19 +3,7 @@
 import { useEffect, useState } from "react";
 import { Eye } from "lucide-react";
 import { fetchJson } from "@/lib/client-fetch";
-
-function getVisitorId(): string {
-  try {
-    let id = localStorage.getItem("site_visitor_id");
-    if (!id) {
-      id = "vis_" + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
-      localStorage.setItem("site_visitor_id", id);
-    }
-    return id;
-  } catch {
-    return `vis_${Date.now()}`;
-  }
-}
+import { getVisitorId } from "@/lib/client-visitor-id";
 
 export function ViewCounter({ slug }: { slug: string }) {
   const [views, setViews] = useState<number | null>(null);

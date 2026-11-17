@@ -6,7 +6,7 @@ import { notifyUser } from "@/lib/notify";
 import { hasPermission, isAtLeast } from "@/lib/permissions";
 import { safeIdentifier } from "@/lib/utils";
 import { CACHE_TAGS, cachedRead, invalidateTags } from "@/lib/cache";
-import { getAllPostsAsync } from "@/lib/posts";
+import { getAllPostsAsync, getPostLookup } from "@/lib/posts";
 import crypto from "crypto";
 
 export const dynamic = 'force-dynamic';
@@ -120,9 +120,11 @@ export async function GET(req: Request) {
     // in-memory lookup instead of another `stories` query per request.
     if (!isVideoSlug) {
       const posts = await getAllPostsAsync({ includeFuture: true, includePending: true });
-      const story = posts.find(
-        (p) => p.slug === postSlug || p.uid === postSlug,
-      );
+      // Identifier lookup is memoised per posts array (lib/posts.ts), so this
+      // is O(1) instead of scanning every story on every comment request.
+      // Match is case-insensitive on the story side — same or stricter than
+      // the old exact compare, never looser.
+      const story = getPostLookup(posts).get(postSlug.toLowerCase()) || null;
 
       if (story) {
         const isPublished = story.status === "published" && new Date(story.publishedAt).getTime() <= Date.now();

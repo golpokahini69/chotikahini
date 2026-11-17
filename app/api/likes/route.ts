@@ -3,6 +3,21 @@ import { getSession } from "@/lib/auth";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { notifyUser } from "@/lib/notify";
 
+/**
+ * GET /api/likes?slug=<story>        → count only, publicly edge-cacheable
+ * GET /api/likes?slug=<story>&me=1    → count + THIS viewer's state, never cached
+ *
+ * The count is identical for every visitor of a story; `liked` is not. When
+ * both lived in one response the whole response had to be `private, no-store`
+ * — so every story view invoked a serverless function and one PostgREST query
+ * just to re-deliver a number that does not change.
+ *
+ * Splitting on `&me=1` keeps the two apart by URL: a request WITHOUT the flag
+ * never reads a session, so no per-user data can possibly reach the shared
+ * cache; a request WITH it is marked `private, no-store` and is never shared.
+ * The client (LikePostButton) picks which URL to use based on whether it knows
+ * you are logged in, so it still makes exactly ONE request either way.
+ */
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
@@ -11,15 +26,19 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Slug required" }, { status: 400 });
     }
 
-    const supabase = getSupabaseAdmin();
-    const session = await getSession();
+    // Only a `me=1` request is allowed to learn who is asking. The plain
+    // request must not even open the session — that is what makes it safe
+    // to serve the same bytes to everyone for a minute.
+    const wantsState = url.searchParams.get("me") === "1";
+    const session = wantsState ? await getSession() : null;
 
-    // The only consumer (LikePostButton) renders a COUNT and whether this
-    // viewer already liked the story. It used to receive every liker's
-    // user_id as well — a payload that grows with popularity and leaks a
-    // list of member IDs to every anonymous visitor. Counting in Postgres
-    // (`head: true`) moves no rows over the wire at all; the viewer's own
-    // row is the single lookup needed for the "did I like it" state.
+    const supabase = getSupabaseAdmin();
+
+    // The consumer (LikePostButton) renders a COUNT and whether this viewer
+    // already liked the story. It used to receive every liker's user_id — a
+    // payload that grows with popularity and leaks a list of member IDs to
+    // anonymous visitors. Counting in Postgres (`head: true`) moves no rows
+    // over the wire at all.
     const { count } = await supabase
       .from("post_likes")
       .select("id", { count: "exact", head: true })
@@ -36,10 +55,24 @@ export async function GET(req: Request) {
       liked = !!mine;
     }
 
-    // `liked` is viewer-specific, so this response is never shared publicly.
+    const viewerSpecific = wantsState || session !== null;
+
     return NextResponse.json(
       { count: count || 0, liked },
-      { headers: { "Cache-Control": "private, no-store" } },
+      {
+        headers: viewerSpecific
+          ? // Per-viewer answer: must never be shared.
+            { "Cache-Control": "private, no-store" }
+          : {
+              // Identical for every anonymous reader of this story: safe to
+              // serve from the Vercel edge for a minute, which removes one
+              // function invocation and one PostgREST call per story view.
+              "Cache-Control":
+                "public, max-age=60, s-maxage=60, stale-while-revalidate=300",
+              "CDN-Cache-Control":
+                "public, s-maxage=60, stale-while-revalidate=300",
+            },
+      },
     );
   } catch (error) {
     console.error("Failed to fetch likes", error);
