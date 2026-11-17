@@ -89,14 +89,13 @@ export function PictureFormFields({
   const [metaError, setMetaError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PictureImageValue[]>([]);
 
-  // Cover picker state: the dropdown lists every image already in the form
-  // so the admin can switch the cover visually instead of pasting URLs.
+  // Cover picker state: every image already in the form becomes a clickable
+  // thumbnail, so the admin chooses the cover visually — not by typing URLs.
   const [useCustomCover, setUseCustomCover] = useState(false);
   const coverMatch = values.images.find((img) => img.url === values.coverUrl);
   const coverIsCustom =
     useCustomCover || (!!values.coverUrl && !coverMatch && values.images.length > 0);
   const showCoverUrlInput = values.images.length === 0 || coverIsCustom;
-  const coverSelectValue = coverIsCustom ? "__custom__" : coverMatch ? coverMatch.url : "";
   const coverOptions = values.images.map((img, i) => ({
     url: img.url,
     label: `ছবি ${i + 1}${img.width && img.height ? ` · ${img.width}×${img.height}` : ""} — ${urlTail(img.thumb || img.url)}`,
@@ -432,48 +431,93 @@ export function PictureFormFields({
         />
       </label>
 
-      {/* ---- Cover: pick from the gallery's images, or paste a URL ---- */}
+      {/* ---- Cover: tap an image from the gallery to set it as cover ---- */}
       <div className="space-y-1.5">
-        <label
-          className="block text-sm font-medium text-fg"
-          htmlFor={`${idPrefix}-cover`}
-        >
-          কভার ছবি
-        </label>
+        <div className="flex items-center justify-between gap-2">
+          <span className="block text-sm font-medium text-fg">কভার ছবি</span>
+          {coverOptions.length > 0 ? (
+            coverIsCustom ? (
+              <button
+                type="button"
+                onClick={() => {
+                  touched.current.coverUrl = true;
+                  setUseCustomCover(false);
+                  onChange({ coverUrl: "" });
+                }}
+                className="text-[11px] font-semibold text-accent underline underline-offset-2 hover:opacity-80"
+              >
+                গ্যালারি থেকে বাছব
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  touched.current.coverUrl = true;
+                  setUseCustomCover(true);
+                  onChange({ coverUrl: "" });
+                }}
+                className="text-[11px] font-semibold text-fg-muted underline underline-offset-2 hover:text-fg"
+              >
+                আলাদা URL ব্যবহার করব
+              </button>
+            )
+          ) : null}
+        </div>
 
         {coverOptions.length > 0 ? (
-          <select
-            id={`${idPrefix}-cover`}
-            value={coverSelectValue}
-            onChange={(e) => {
-              const next = e.target.value;
-              touched.current.coverUrl = true;
-              if (next === "__custom__") {
-                setUseCustomCover(true);
-                onChange({ coverUrl: "" });
-              } else {
-                setUseCustomCover(false);
-                onChange({ coverUrl: next });
-              }
-            }}
-            required={!showCoverUrlInput}
-            className="input-field w-full"
+          <div
+            className="max-h-60 overflow-y-auto rounded-xl border border-border bg-surface-alt/40 p-2"
+            role="listbox"
+            aria-label="গ্যালারির ছবি থেকে কভার নির্বাচন করুন"
           >
-            <option value="" disabled>
-              — গ্যালারি থেকে কভার বাছুন —
-            </option>
-            {coverOptions.map((opt) => (
-              <option key={opt.url} value={opt.url}>
-                {opt.label}
-              </option>
-            ))}
-            <option value="__custom__">নিজের HTTPS URL ব্যবহার করব…</option>
-          </select>
+            <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-6">
+              {values.images.map((img, i) => {
+                const selected = !coverIsCustom && values.coverUrl === img.url;
+                return (
+                  <button
+                    key={`${img.url}-${i}`}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onClick={() => {
+                      touched.current.coverUrl = true;
+                      setUseCustomCover(false);
+                      onChange({ coverUrl: img.url });
+                    }}
+                    title={`ছবি ${i + 1}${img.width && img.height ? ` · ${img.width}×${img.height}` : ""} — ${urlTail(img.url)}`}
+                    className={`group relative aspect-[3/4] overflow-hidden rounded-lg border-2 transition ${
+                      selected
+                        ? "border-accent ring-2 ring-accent/40"
+                        : "border-transparent hover:border-border"
+                    }`}
+                  >
+                    <Image
+                      src={img.thumb || img.url}
+                      alt=""
+                      fill
+                      unoptimized
+                      sizes="96px"
+                      className="object-cover"
+                    />
+                    {selected ? (
+                      <span className="absolute inset-x-0 bottom-0 bg-accent px-1 py-0.5 text-center text-[9px] font-bold text-white">
+                        কভার
+                      </span>
+                    ) : (
+                      <span className="absolute bottom-0.5 right-0.5 rounded bg-black/55 px-1 text-[9px] font-bold text-white opacity-0 transition group-hover:opacity-100">
+                        {i + 1}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         ) : null}
 
         {showCoverUrlInput ? (
           <input
-            id={coverOptions.length > 0 ? `${idPrefix}-cover-url` : `${idPrefix}-cover`}
+            id={`${idPrefix}-cover`}
             type="url"
             inputMode="url"
             value={values.coverUrl}
@@ -488,7 +532,7 @@ export function PictureFormFields({
           />
         ) : null}
 
-        {values.coverUrl ? (
+        {coverIsCustom && values.coverUrl ? (
           <span className="block h-24 w-16 overflow-hidden rounded-lg border border-border bg-surface-alt">
             <Image
               src={values.coverUrl}
@@ -503,7 +547,7 @@ export function PictureFormFields({
 
         <span className="block text-xs font-normal leading-5 text-fg-muted">
           {coverOptions.length > 0
-            ? "ড্রপডাউন থেকে গ্যালারির যেকোনো ছবি বাছুন — আলাদা লিংক লাগলে শেষ অপশনটি বেছে নিন।"
+            ? "কভার বানাতে ছবির উপর ক্লিক করুন — যেকোনো সময় বদলানো যাবে।"
             : "গ্যালারির প্রথম ছবিটাই কভার হিসেবে বসে থাকে।"}
         </span>
       </div>

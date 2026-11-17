@@ -7,6 +7,7 @@ import { hasPermission, isSuperAdminRole, getAssignableRoles } from "@/lib/permi
 import { logAudit, logAuditCritical } from "@/lib/audit";
 import { notifyAdmins, notifyUser } from "@/lib/notify";
 import { NOTIFICATION_TYPES } from "@/lib/notify-types";
+import { CACHE_TAGS, invalidateTags } from "@/lib/cache";
 
 export const dynamic = 'force-dynamic';
 
@@ -153,6 +154,10 @@ export async function PUT(req: Request) {
         .eq("id", userId);
 
       if (updateError) throw updateError;
+
+      // Role/verify/suspend changes must reach every session hydrate on the
+      // next request — expire the cached live-user rows immediately.
+      invalidateTags(CACHE_TAGS.users);
 
       // An admin setting a password directly is a password reset. Notify
       // the user (so they know their password changed and that the old one

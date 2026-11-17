@@ -2283,7 +2283,7 @@ return (
                           রিভিউ
                         </button>
                         <Link
-                          href={`/${story.uid || story.slug}`}
+                          href={story.publicSlug ? `/golpo/${story.publicSlug}` : `/${story.uid || story.slug}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="px-2.5 py-1 text-xs bg-surface text-fg border border-border font-bold rounded-lg hover:bg-surface-hover transition-colors"

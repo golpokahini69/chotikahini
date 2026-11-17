@@ -3,6 +3,7 @@ import { jwtVerify, SignJWT } from "jose";
 import { cookies } from "next/headers";
 import { NextRequest } from "next/server";
 import { getSupabaseAdmin } from "./supabase";
+import { CACHE_TAGS, cachedRead } from "./cache";
 
 const DEFAULT_JWT_SECRET = "default_fallback_secret_do_not_use_in_prod";
 const RAW_JWT_SECRET = process.env.JWT_SECRET || "";
@@ -40,17 +41,44 @@ export interface UserSessionPayload {
 }
 
 /**
+ * Live user row for session hydration — shared Data Cache, 60 s, per user id.
+ *
+ * Every authenticated request used to pay one full PostgREST round-trip
+ * (measured ~1–2.4 s live) just to re-read the SAME row for role/name/avatar,
+ * and the old request-scoped dedupe died with each serverless instance: a
+ * dashboard open fired nine parallel APIs and each one hydrated separately.
+ *
+ * Writes that change this row tag-invalidate the entry: `users` on profile,
+ * role and saved-post updates, plus `posts` so every `clearPostsCache()` path
+ * (user-sync included) also refreshes it. Role changes therefore still apply
+ * on the next request; 60 s is only the bounded worst case for a writer that
+ * forgets to invalidate.
+ */
+const readLiveSessionUser = cachedRead(
+  "session-live-user",
+  async (userId: string) => {
+    const supabase = getSupabaseAdmin();
+    const { data } = await supabase
+      .from("users")
+      .select("id, username, name, profile_pic, saved_posts, role, is_verified")
+      .eq("id", userId)
+      .maybeSingle();
+    return { user: data ?? null };
+  },
+  {
+    revalidate: 60,
+    keyParts: ([userId]) => [userId],
+    tags: [CACHE_TAGS.users, CACHE_TAGS.posts],
+  },
+);
+
+/**
  * Hydrates live user details (role, name, avatar) from DB so permissions take effect immediately.
  */
 async function hydrateSessionUser(base: UserSessionPayload): Promise<UserSessionPayload> {
   if (!base?.id) return base;
   try {
-    const supabase = getSupabaseAdmin();
-    const { data: liveUser } = await supabase
-      .from("users")
-      .select("id, username, name, profile_pic, saved_posts, role, is_verified")
-      .eq("id", base.id)
-      .maybeSingle();
+    const { user: liveUser } = await readLiveSessionUser(base.id);
 
     if (liveUser) {
       return {

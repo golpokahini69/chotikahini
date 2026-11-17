@@ -4,6 +4,7 @@ import { getSession, setSession } from "@/lib/auth";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { syncUserCascade } from "@/lib/user-sync";
 import { isAvatarAvailable } from "@/lib/avatars";
+import { CACHE_TAGS, invalidateTags } from "@/lib/cache";
 
 export async function PUT(req: Request) {
   try {
@@ -75,6 +76,10 @@ export async function PUT(req: Request) {
       console.error("Profile update error:", updateError);
       throw new Error("প্রোফাইল আপডেট করতে সমস্যা হয়েছে।");
     }
+
+    // Role/name/avatar fields feed the session-hydrate cache — expire it so
+    // the next request re-reads the row instead of serving the old one.
+    invalidateTags(CACHE_TAGS.users);
 
     // Sync user details across DB, MDX article frontmatters, and author configs
     await syncUserCascade({

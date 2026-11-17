@@ -185,6 +185,12 @@ export function PictureManager({ view = "all" }: { view?: PictureManagerView }) 
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
+    // The click-to-pick cover grid replaces the old always-visible required
+    // input, so the same rule is enforced here: every gallery needs a cover.
+    if (!form.coverUrl.trim()) {
+      setError("কভার ছবি বাছুন — গ্যালারির যেকোনো ছবিতে ক্লিক করুন অথবা আলাদা URL দিন।");
+      return;
+    }
     const isEdit = !!editingId;
     setBusy(isEdit ? `edit:${editingId}` : "create");
     setError("");
