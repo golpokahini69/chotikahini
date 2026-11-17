@@ -139,6 +139,11 @@ export async function GET(request: Request) {
   // them.
   const slugColumns = `${baseColumns}, public_slug`;
   const scheduleColumns = `${slugColumns}, scheduled_at`;
+  // `view_count` = THIS site's own per-gallery view total (bumped by
+  // /api/pictures/[id]/view). Optional exactly like public_slug and
+  // scheduled_at: if scripts/picture-views.sql has not been run the list
+  // query falls back one level at a time instead of failing outright.
+  const viewColumns = `${scheduleColumns}, view_count`;
 
   const applyFilter = (q: any) => {
     let out = q.neq("status", "deleted");
@@ -159,16 +164,16 @@ export async function GET(request: Request) {
   let res = await applyFilter(
     supabase
       .from("picture_galleries")
-      .select(scheduleColumns, { count: "exact" }),
+      .select(viewColumns, { count: "exact" }),
   )
     .order("created_at", { ascending: false })
     .range(offset, offset + pageSize - 1);
 
   if (res.error) {
-    // `scheduled_at` and/or `public_slug` may be missing (their
+    // `view_count`, `scheduled_at` and/or `public_slug` may be missing (their
     // migrations haven't been run). Retry with the columns we know exist,
     // dropping the optional ones one at a time.
-    for (const columns of [slugColumns, baseColumns]) {
+    for (const columns of [scheduleColumns, slugColumns, baseColumns]) {
       if (!res.error) break;
       const fallback = await applyFilter(
         supabase
@@ -192,7 +197,7 @@ export async function GET(request: Request) {
   // Global counts for the stat strip (independent of the active filter and
   // page) — run in parallel; each is a cheap head-count.
   const nowIso = new Date().toISOString();
-  const [totalRes, publishedRes, imagesRes, scheduledRes] = await Promise.all([
+  const [totalRes, publishedRes, imagesRes, scheduledRes, totalViewsRes] = await Promise.all([
     supabase
       .from("picture_galleries")
       .select("id", { count: "exact", head: true })
@@ -230,6 +235,23 @@ export async function GET(request: Request) {
       if (sr.error) return 0;
       return sr.count ?? 0;
     })(),
+    (async () => {
+      // The site's own total picture views. PostgREST has no SUM, so this
+      // reads ONLY the `view_count` column over non-deleted galleries (one
+      // small number per gallery — 110 rows today ≈ a few KB) and adds them
+      // up here. It is not a row/event download: there is no other way to
+      // aggregate, and the alternative — an added database function — is a
+      // schema change that needs approval, which this avoids.
+      const vr = await supabase
+        .from("picture_galleries")
+        .select("view_count")
+        .neq("status", "deleted");
+      if (vr.error || !Array.isArray(vr.data)) return null;
+      return (vr.data as { view_count?: number | null }[]).reduce(
+        (sum, r) => sum + (Number(r.view_count) || 0),
+        0,
+      );
+    })(),
   ]);
 
   const total = res.count ?? 0;
@@ -244,6 +266,7 @@ export async function GET(request: Request) {
       publishedGalleries: publishedRes.count ?? 0,
       scheduledGalleries: scheduledRes,
       totalImages: imagesRes ?? null,
+      totalViews: totalViewsRes,
     },
   });
 }

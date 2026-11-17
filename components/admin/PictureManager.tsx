@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Check,
+  Eye,
   ExternalLink,
   Images,
   Link2,
@@ -40,6 +41,12 @@ interface PictureGallery {
   categories: string[] | null;
   tags: string[] | null;
   source_views: number | null;
+  /**
+   * THIS site's own view total for the gallery — bumped by
+   * /api/pictures/[id]/view. Absent when the column was not migrated
+   * (optional, like public_slug/scheduled_at).
+   */
+  view_count?: number | null;
   status: "draft" | "published";
   created_at: string;
   published_at: string | null;
@@ -59,6 +66,8 @@ interface ListMeta {
     scheduledGalleries: number;
     /** null when the image_count column is missing. */
     totalImages: number | null;
+    /** Site-wide picture views, summed from view_count. null if unavailable. */
+    totalViews?: number | null;
   };
 }
 
@@ -122,6 +131,7 @@ export function PictureManager({ view = "all" }: { view?: PictureManagerView }) 
             ).length,
             scheduledGalleries: 0,
             totalImages: null,
+            totalViews: null,
           },
         });
       } catch (loadError) {
@@ -151,6 +161,7 @@ export function PictureManager({ view = "all" }: { view?: PictureManagerView }) 
   // subtracted here to keep the chip counts truthful.
   const draftCount = Math.max(0, totalCount - publishedCount - scheduledCount);
   const totalImages = meta?.stats.totalImages ?? null;
+  const totalViews = meta?.stats.totalViews ?? null;
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -330,13 +341,17 @@ export function PictureManager({ view = "all" }: { view?: PictureManagerView }) 
       </header>
 
       {/* ---- Stat strip: global counts, independent of the active page/filter ---- */}
-      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <StatTile label="মোট গ্যালারি" value={enToBnNumber(totalCount)} />
         <StatTile label="প্রকাশিত" value={enToBnNumber(publishedCount)} />
         <StatTile label="শিডিউলড" value={enToBnNumber(scheduledCount)} />
         <StatTile
           label="মোট ছবি"
           value={totalImages === null ? "—" : enToBnNumber(totalImages)}
+        />
+        <StatTile
+          label="মোট ভিউ"
+          value={totalViews === null ? "—" : enToBnNumber(totalViews)}
         />
       </dl>
 
@@ -655,6 +670,18 @@ function AdminPictureRow({
           <span className="tabular-nums text-fg-subtle">
             {enToBnNumber(count)}টি ছবি
           </span>
+          {typeof picture.view_count === "number" ? (
+            <>
+              <span aria-hidden className="text-border/80">·</span>
+              <span
+                className="tabular-nums inline-flex items-center gap-1 text-fg-subtle"
+                title="এই সাইটে গ্যালারিটির মোট ভিউ"
+              >
+                <Eye className="h-3.5 w-3.5" />
+                {enToBnNumber(picture.view_count)} ভিউ
+              </span>
+            </>
+          ) : null}
           <span aria-hidden className="text-border/80">·</span>
           <span className="truncate">{ago}</span>
         </div>
