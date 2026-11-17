@@ -38,49 +38,6 @@ import { getViewTotals } from "@/lib/view-totals";
  * numbers refresh immediately after a publish.
  */
 
-/**
- * Sum of story view totals — RPC first, then a bounded read of the
- * per-story aggregate table.
- *
- * The RPC lives only in scripts/setup.sql and has NOT been run on the live
- * database, where it fails. Measured live: every failed round-trip still
- * costs ~1–2 seconds, so the miss is NEGATIVE-CACHED for 10 minutes — the
- * dashboard pays for the failed RPC once per process instead of on every
- * single load (and it retries after a deploy, when a `next start` restart
- * could have installed it).
- */
-let rpcMissUntil = 0;
-
-async function readStoryViewTotal(supabase: ReturnType<typeof getSupabaseAdmin>): Promise<number> {
-  // Preferred: one aggregate statement, no rows.
-  if (Date.now() > rpcMissUntil) {
-    try {
-      const { data, error } = await supabase.rpc("admin_visit_stats", { p_days: 1 });
-      if (error) {
-        rpcMissUntil = Date.now() + 10 * 60 * 1000; // known-missing: skip for 10 min
-      } else if (data) {
-        const total = (data as { totalVisits?: number }).totalVisits;
-        if (typeof total === "number") return total;
-      }
-    } catch {
-      rpcMissUntil = Date.now() + 10 * 60 * 1000;
-    }
-  }
-
-  // Fallback: `post_views` has ONE row per story (not per view), so this
-  // read is bounded by the number of stories (~240) — about a few KB —
-  // instead of anything proportional to traffic.
-  try {
-    const { data, error } = await supabase.from("post_views").select("view_count");
-    if (error) return 0;
-    let total = 0;
-    for (const row of data || []) total += Number(row.view_count) || 0;
-    return total;
-  } catch {
-    return 0;
-  }
-}
-
 /** The aggregate batch itself — cached for 60 s in the shared Data Cache. */
 const readStatsBatch = cachedRead(
   "admin-stats-batch",
@@ -100,7 +57,6 @@ const readStatsBatch = cachedRead(
       usersCountRes,
       roleCountRes,
       todayReadersRes,
-      storyViewTotalRes,
       storyCountRes,
       statusRowsRes,
       pendingRowsRes,
@@ -127,13 +83,10 @@ const readStatsBatch = cachedRead(
         .select("user_id", { count: "exact", head: true })
         .gte("last_read_at", todayIso),
 
-      // 4. Total story views — RPC first, bounded fallback second.
-      readStoryViewTotal(supabase),
-
-      // 5. Total stories — count only.
+      // 4. Total stories — count only.
       supabase.from("stories").select("uid", { count: "exact", head: true }),
 
-      // 6. Story status classification — bounded to the catalogue (~240
+      // 5. Story status classification — bounded to the catalogue (~240
       //    rows) and narrowed to 4 short columns. Needed because "scheduled"
       //    is a future timestamp inside the published bucket, and pending
       //    stories whose history says "crawled" must not count as author
@@ -143,14 +96,14 @@ const readStatsBatch = cachedRead(
         .select("uid, status, published_at, scheduled_at")
         .limit(1000),
 
-      // 7. Pending stories only — fetched only for the pending bucket.
+      // 6. Pending stories only — fetched only for the pending bucket.
       supabase
         .from("stories")
         .select("uid, history")
         .eq("status", "pending")
         .limit(1000),
 
-      // 8/9. Scheduled media — previously a SECOND sequential batch (another
+      // 7/8. Scheduled media — previously a SECOND sequential batch (another
       //      full round-trip); same Promise.all now.
       supabase
         .from("video_posts")
@@ -174,7 +127,6 @@ const readStatsBatch = cachedRead(
     });
 
     const todayVisitorsCount = todayReadersRes.count || 0;
-    const totalViewCount = storyViewTotalRes;
     const totalStories = storyCountRes.count || 0;
 
     // ── Story status classification (same rules as before) ──
@@ -218,7 +170,6 @@ const readStatsBatch = cachedRead(
       totalUsers,
       rolesCount,
       dailyCount,
-      totalPageViews: totalViewCount,
       totalStories,
       publishedStories,
       pendingStories,
@@ -252,7 +203,6 @@ export async function GET() {
       totalUsers: canSeeUserStats ? payload.totalUsers : undefined,
       rolesCount: canSeeUserStats ? payload.rolesCount : undefined,
       dailyCount: payload.dailyCount,
-      totalPageViews: payload.totalPageViews,
       totalStories: payload.totalStories,
       publishedStories: payload.publishedStories,
       pendingStories: payload.pendingStories,

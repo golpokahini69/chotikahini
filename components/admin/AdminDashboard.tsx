@@ -588,21 +588,6 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
   const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set());
   const [bulkActionLoading, setBulkActionLoading] = useState(false);
 
-  const fetchDrafts = async () => {
-    try {
-      const res = await fetch("/api/author/my-stories?brief=1");
-      const json = await res.json();
-      if (res.ok && Array.isArray(json.stories)) {
-        const draftStories = json.stories.filter((s: any) => s.status === "draft");
-        setDrafts(draftStories.map((s: any) => ({ name: s.title, path: s.slug, sha: s.uid })));
-      }
-    } catch (err) {
-      console.error("Failed to fetch drafts", err);
-    } finally {
-      setLoadingDrafts(false);
-    }
-  };
-
   const fetchAuthors = async () => {
     setLoadingAuthors(true);
     try {
@@ -629,11 +614,19 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
         const json = await res.json();
         const stories = json.stories || [];
         setAllStoriesQueue(stories);
+        // Drafts come from the SAME payload — a second request to the same
+        // endpoint (the old fetchDrafts) was pure duplication.
+        setDrafts(
+          stories
+            .filter((story: any) => story.status === "draft")
+            .map((story: any) => ({ name: story.title, path: story.slug, sha: story.uid })),
+        );
       }
     } catch (e) {
       console.error("Failed to fetch all stories for review", e);
     } finally {
       setLoadingStoriesQueue(false);
+      setLoadingDrafts(false);
     }
   };
 
@@ -659,7 +652,6 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
   };
 
   useEffect(() => {
-    fetchDrafts();
     fetchStats();
     fetchAnalytics();
     fetchAuthors();
@@ -771,7 +763,6 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
       if (res.ok && json.success) {
         setReviewMsg({ type: "success", text: json.message || "অপারেশন সফলভাবে সম্পন্ন হয়েছে!" });
         setPostsList((prev) => prev.filter((p) => (p.fileSlug || p.slug) !== fileSlug));
-        fetchDrafts();
         fetchAuthors();
         fetchAllStoriesForReview();
         fetchStats();
@@ -1053,7 +1044,13 @@ return (
                 {activeSection === "messages" && "কন্টাক্ট ফর্ম থেকে পাঠানো সমস্ত বার্তা পর্যালোচনা ও উত্তর প্রদান করুন।"}
                 {activeSection === "notifications" && adminNotifications.length > 0 && (
                   <span className="block mt-1 font-semibold text-fg">
-                    {enToBnNumber(adminNotifications.length)}টি নোটিফিকেশন
+                    {(() => {
+                      const unread = adminNotifications.filter((n) => !n.isRead).length;
+                      const total = adminNotifications.length;
+                      return unread > 0
+                        ? `${enToBnNumber(unread)}টি নতুন অপঠিত · মোট ${enToBnNumber(total)}টি`
+                        : `সব পড়া হয়েছে · মোট ${enToBnNumber(total)}টি`;
+                    })()}
                     {" · "}
                     {(() => {
                       const unread = adminNotifications.filter((n) => !n.isRead).length;
@@ -1131,7 +1128,7 @@ return (
               </div>
 
               {/* Quick Stats Grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
                 {/* 0. Total Stories */}
                 <div className="bg-surface-alt p-4 rounded-2xl border border-border shadow-xs flex flex-col justify-between min-h-[105px] transition-all hover:border-blue-500/30">
                   <div className="flex items-center justify-between gap-2">
@@ -1182,19 +1179,45 @@ return (
                   </div>
                 </div>
 
-                {/* 5. Total Page Views */}
-                <div className="bg-surface-alt p-4 rounded-2xl border border-border shadow-xs flex flex-col justify-between min-h-[105px] transition-all hover:border-rose-500/30">
+                {/* Pending review — actionable, and was served by the API but
+                    never rendered on the overview. */}
+                <button
+                  onClick={() => setActiveSection("review")}
+                  className="bg-surface-alt p-4 rounded-2xl border border-border shadow-xs flex flex-col justify-between min-h-[105px] text-left transition-all hover:border-amber-500/40"
+                >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs text-fg-muted font-semibold truncate">মোট পেজ ভিউ</span>
-                    <span className="p-2 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 rounded-xl shrink-0">
-                      <TrendingUp className="w-4 h-4" />
+                    <span className="text-xs text-fg-muted font-semibold truncate">অপেক্ষমাণ রিভিউ</span>
+                    <span className="p-2 bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 rounded-xl shrink-0">
+                      <FileCheck className="w-4 h-4" />
+                    </span>
+                  </div>
+                  <div className="mt-2">
+                    <p className="text-2xl font-black tracking-tight text-amber-600 dark:text-amber-400">
+                      {enToBnNumber(stats?.pendingStories || 0)}
+                    </p>
+                    <p className="text-[10.5px] text-fg-subtle truncate mt-0.5">রিভিউ সেন্টারে যান</p>
+                  </div>
+                </button>
+
+                {/* Scheduled total (stories + videos + pictures) */}
+                <div className="bg-surface-alt p-4 rounded-2xl border border-border shadow-xs flex flex-col justify-between min-h-[105px] transition-all hover:border-sky-500/30">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-fg-muted font-semibold truncate">শিডিউলড</span>
+                    <span className="p-2 bg-sky-50 dark:bg-sky-900/20 text-sky-600 dark:text-sky-400 rounded-xl shrink-0">
+                      <Clock className="w-4 h-4" />
                     </span>
                   </div>
                   <div className="mt-2">
                     <p className="text-2xl font-black tracking-tight text-fg">
-                      {enToBnNumber(stats?.totalPageViews || 0)}
+                      {enToBnNumber(
+                        (stats?.scheduledStories || 0) +
+                        (stats?.scheduledVideos || 0) +
+                        (stats?.scheduledPictures || 0)
+                      )}
                     </p>
-                    <p className="text-[10.5px] text-fg-subtle truncate mt-0.5">সর্বমোট গল্প দর্শন</p>
+                    <p className="text-[10.5px] text-fg-subtle truncate mt-0.5">
+                      গল্প {enToBnNumber(stats?.scheduledStories || 0)} · ভিডিও {enToBnNumber(stats?.scheduledVideos || 0)} · ছবি {enToBnNumber(stats?.scheduledPictures || 0)}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -2069,12 +2092,43 @@ return (
                     সবগুলো পড়া হয়েছে
                   </button>
                   <button
-                    onClick={fetchAdminNotifications}
+                    onClick={() => ensureAdminNotifications(true)}
                     className="px-3.5 py-2 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 font-medium text-xs rounded-xl hover:bg-blue-100 transition-colors"
                   >
                     রিফ্রেশ
                   </button>
                 </div>
+              </div>
+              {/* Two-tab system: "নতুন" holds only unread items; "পড়েছে" holds
+                  everything marked read. Counts come from the already-loaded
+                  list, so switching tabs never triggers a reload. */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => { setNotifTab("new"); setNotifPage(1); }}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors ${
+                    notifTab === "new"
+                      ? "bg-rose-600 text-white"
+                      : "bg-surface-alt text-fg-muted border border-border hover:bg-surface-hover"
+                  }`}
+                >
+                  নতুন
+                  <span className="ml-1.5 inline-flex min-w-[18px] items-center justify-center rounded-full bg-white/25 px-1 text-[10px]">
+                    {enToBnNumber(adminNotifications.filter((n) => !n.isRead).length)}
+                  </span>
+                </button>
+                <button
+                  onClick={() => { setNotifTab("read"); setNotifPage(1); }}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors ${
+                    notifTab === "read"
+                      ? "bg-fg text-surface"
+                      : "bg-surface-alt text-fg-muted border border-border hover:bg-surface-hover"
+                  }`}
+                >
+                  পড়েছে
+                  <span className="ml-1.5 inline-flex min-w-[18px] items-center justify-center rounded-full bg-black/10 dark:bg-white/15 px-1 text-[10px]">
+                    {enToBnNumber(adminNotifications.filter((n) => n.isRead).length)}
+                  </span>
+                </button>
               </div>
 
               <div className="bg-surface-alt rounded-2xl border border-border shadow-sm overflow-hidden divide-y divide-zinc-200 dark:divide-zinc-800">
@@ -2230,6 +2284,12 @@ return (
                             রিভিউ সেন্টার
                           </button>
                         )}
+                        <button
+                          onClick={() => toggleAdminNotificationRead(ntf)}
+                          className="px-3 py-1.5 text-xs bg-surface-hover text-fg font-medium rounded-xl hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
+                        >
+                          {ntf.isRead ? "পড়া হয়নি চিহ্নিত" : "পড়া হয়েছে চিহ্নিত"}
+                        </button>
                         <button
                           onClick={() => deleteAdminNotification(ntf.id)}
                           className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-colors"

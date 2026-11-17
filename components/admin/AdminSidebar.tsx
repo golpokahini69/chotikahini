@@ -61,8 +61,6 @@ interface NavItem {
   permission: Permission;
   badge?: keyof AdminSidebarBadges;
   badgeColor?: string;
-  /** Optional total-count key: shown when `badge` (unread) is 0. */
-  badgeTotal?: keyof AdminSidebarBadges;
 }
 
 interface NavGroup {
@@ -251,7 +249,6 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/admin?section=notifications",
         permission: "notifications.view",
         badge: "unreadNotifications",
-        badgeTotal: "totalNotifications",
         badgeColor: "bg-rose-600 text-white animate-pulse",
       },
       {
@@ -455,21 +452,16 @@ export function AdminSidebar({
                 {visibleItems.map((item) => {
                   const active = isItemActive(item);
                   const badgeValue = item.badge && badges[item.badge];
-                  const badgeTotal = item.badgeTotal && badges[item.badgeTotal];
                   const unreadNum = typeof badgeValue === "number" ? badgeValue : 0;
-                  const totalNum = typeof badgeTotal === "number" ? badgeTotal : unreadNum;
-                  // Unread first; when everything has been read, show the
-                  // TOTAL so the count never silently disappears.
-                  const badgeDisplay = unreadNum > 0 ? badgeValue : badgeTotal ?? badgeValue;
-                  const hasUnread = unreadNum > 0;
-                  const hasBadge = typeof badgeDisplay === "number" && badgeDisplay > 0;
-                  const badgeTitle = !hasBadge
-                    ? undefined
-                    : hasUnread
-                      ? totalNum !== unreadNum
-                        ? `${enToBnNumber(unreadNum)}টি অপঠিত · ${enToBnNumber(totalNum)}টি মোট`
-                        : `${enToBnNumber(unreadNum)}টি অপঠিত`
-                      : `${enToBnNumber(totalNum)}টি নোটিফিকেশন — সবগুলো পড়া হয়েছে`;
+                  // Only UNREAD work is badged. A total-count fallback used to
+                  // keep a number on the nav item forever ("12" even after
+                  // everything was read), which read like pending work — the
+                  // exact complaint. Nothing unread → no badge at all.
+                  const badgeDisplay = unreadNum > 0 ? unreadNum : 0;
+                  const hasBadge = badgeDisplay > 0;
+                  const badgeTitle = hasBadge
+                    ? `${enToBnNumber(unreadNum)}টি অপঠিত`
+                    : undefined;
                   const targetHref = item.href || (item.section ? `/admin?section=${item.section}` : "/admin");
 
                   return (
@@ -496,11 +488,7 @@ export function AdminSidebar({
                         <span
                           title={badgeTitle}
                           className={`shrink-0 px-1.5 py-0.5 text-[10px] font-bold rounded-full transition-all ${
-                            active
-                              ? "bg-white text-blue-700"
-                              : hasUnread
-                                ? item.badgeColor || "bg-blue-600 text-white"
-                                : (item.badgeColor || "bg-blue-600 text-white").replace(" animate-pulse", "")
+                            active ? "bg-white text-blue-700" : item.badgeColor || "bg-blue-600 text-white"
                           }`}
                         >
                           {enToBnNumber(badgeDisplay as number)}
