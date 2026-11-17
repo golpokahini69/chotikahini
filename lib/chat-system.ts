@@ -54,6 +54,47 @@ async function findPublicSlug(
 /** Marker identity for system rows — never a real user id. */
 const SYSTEM_USER_ID = null;
 
+/** The three publishable content kinds that get broadcasts. */
+export type PublishKind = "story" | "video" | "picture";
+
+/**
+ * Canonical absolute URL for freshly published content.
+ *
+ * Shared by the chat announcements (below) and `lib/publish-broadcast.ts`
+ * (which also posts to the community feed), so the chat message and the feed
+ * post always link to the exact same place:
+ *   story   → /golpo/<public-slug>   (legacy fallback: /<uid>)
+ *   video   → /video/<public-slug>   (legacy fallback: /videos/<id>)
+ *   picture → /image/<public-slug>   (legacy fallback: /pictures/<id>)
+ *
+ * Returns null when the id resolves to nothing usable.
+ */
+export async function resolvePublishHref(
+  kind: PublishKind,
+  id: string,
+): Promise<string | null> {
+  const raw = (id || "").trim().replace(/^\/+/, "");
+  if (!raw) return null;
+
+  const origin = siteOrigin();
+
+  if (kind === "video") {
+    const slug = await findPublicSlug("video_posts", "id", raw);
+    const path = slug ? `/video/${slug}` : `/videos/${raw}`;
+    return origin ? `${origin}${path}` : path;
+  }
+
+  if (kind === "picture") {
+    const slug = await findPublicSlug("picture_galleries", "id", raw);
+    const path = slug ? `/image/${slug}` : `/pictures/${raw}`;
+    return origin ? `${origin}${path}` : path;
+  }
+
+  const slug = await findPublicSlug("stories", "uid", raw);
+  const path = slug ? `/golpo/${slug}` : `/${raw}`;
+  return origin ? `${origin}${path}` : path;
+}
+
 /**
  * Insert one system announcement into the global chat.
  *
@@ -121,12 +162,8 @@ export async function announceVideoPublished(
   const id = (videoId || "").trim();
   if (!id) return false;
 
-  // New public URL when the video has a public slug; old URL otherwise.
-  const slug = await findPublicSlug("video_posts", "id", id);
-  const path = slug ? `/video/${slug}` : `/videos/${id}`;
-
-  const origin = siteOrigin();
-  const href = origin ? `${origin}${path}` : path;
+  const href = await resolvePublishHref("video", id);
+  if (!href) return false;
 
   const safeTitle = (title || "").trim();
   const headline = safeTitle ? `নতুন ভিডিও: ${safeTitle}` : "নতুন ভিডিও প্রকাশিত হয়েছে";
@@ -149,12 +186,8 @@ export async function announcePicturePublished(
   const id = (galleryId || "").trim();
   if (!id) return false;
 
-  // New public URL when the gallery has a public slug; old URL otherwise.
-  const slug = await findPublicSlug("picture_galleries", "id", id);
-  const path = slug ? `/image/${slug}` : `/pictures/${id}`;
-
-  const origin = siteOrigin();
-  const href = origin ? `${origin}${path}` : path;
+  const href = await resolvePublishHref("picture", id);
+  if (!href) return false;
 
   const safeTitle = (title || "").trim();
   const headline = safeTitle
@@ -176,15 +209,8 @@ export async function announceStoryPublished(
   storyPath: string,
   title: string,
 ): Promise<boolean> {
-  const path = (storyPath || "").trim().replace(/^\/+/, "");
-  if (!path) return false;
-
-  // New public URL when the story has a public slug; old URL otherwise.
-  const slug = await findPublicSlug("stories", "uid", path);
-  const publicPath = slug ? `/golpo/${slug}` : `/${path}`;
-
-  const origin = siteOrigin();
-  const href = origin ? `${origin}${publicPath}` : publicPath;
+  const href = await resolvePublishHref("story", storyPath);
+  if (!href) return false;
 
   const safeTitle = (title || "").trim();
   const headline = safeTitle

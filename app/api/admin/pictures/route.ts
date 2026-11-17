@@ -7,7 +7,7 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { normalizeImages } from "@/lib/pictures";
 import { pictureSourceKey } from "@/lib/picture-source-url";
 import { resolvePublishState, resolveSchedulePatch } from "@/lib/media-schedule";
-import { announcePicturePublished } from "@/lib/chat-system";
+import { broadcastPublish } from "@/lib/publish-broadcast";
 import { CACHE_TAGS, invalidateTags } from "@/lib/cache";
 import { revalidatePicturePaths } from "@/lib/revalidate-media";
 
@@ -358,13 +358,14 @@ export async function POST(request: Request) {
       throw insertError;
     }
 
-    // Announce the new gallery in the global chat. Never blocks the
-    // response — `announcePicturePublished` swallows its own failures.
+    // Broadcast the new gallery — global chat message AND community-feed
+    // auto post, fired together. Never blocks the response —
+    // `broadcastPublish` swallows its own failures.
     //
-    // A scheduled gallery is NOT announced here — the announcement belongs
-    // to the moment it actually goes live, which is the cron route's job.
+    // A scheduled gallery is NOT broadcast here — it belongs to the moment
+    // it actually goes live, which is the cron route's job.
     if (!publishState.scheduled_at) {
-      await announcePicturePublished(data.id, values.title);
+      await broadcastPublish({ kind: "picture", id: data.id, title: values.title, actorId: session.id });
     }
 
     invalidateTags(CACHE_TAGS.pictures);
@@ -527,7 +528,7 @@ export async function PATCH(request: Request) {
         update.title &&
         !endsScheduled
       ) {
-        await announcePicturePublished(id, String(update.title));
+        await broadcastPublish({ kind: "picture", id, title: String(update.title), actorId: session.id });
       }
 
       return NextResponse.json({
@@ -576,7 +577,7 @@ export async function PATCH(request: Request) {
     if (updateError) throw updateError;
 
     if (titleForAnnounce) {
-      await announcePicturePublished(id, titleForAnnounce);
+      await broadcastPublish({ kind: "picture", id, title: titleForAnnounce, actorId: session.id });
     }
 
     invalidateTags(CACHE_TAGS.pictures);

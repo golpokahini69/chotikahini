@@ -1,10 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import {
-  announcePicturePublished,
-  announceStoryPublished,
-  announceVideoPublished,
-} from "@/lib/chat-system";
+import { broadcastPublish } from "@/lib/publish-broadcast";
 import { getSession } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { clearPostsCache } from "@/lib/posts";
@@ -216,15 +212,18 @@ export async function GET(request: Request) {
       publishDueStories(),
     ]);
 
-    // Every content type gets a chat announcement the moment it goes live.
+    // Every content type broadcasts the moment it goes live: the global
+    // chat message AND the community-feed auto post, fired together.
+    // No session here — the feed post falls back to the site's oldest
+    // superadmin/admin account (see lib/publish-broadcast.ts).
     for (const video of videos.titles) {
-      await announceVideoPublished(video.id, video.title);
+      await broadcastPublish({ kind: "video", id: video.id, title: video.title });
     }
     for (const picture of pictures.titles) {
-      await announcePicturePublished(picture.id, picture.title);
+      await broadcastPublish({ kind: "picture", id: picture.id, title: picture.title });
     }
     for (const story of stories.titles) {
-      await announceStoryPublished(story.id, story.title);
+      await broadcastPublish({ kind: "story", id: story.id, title: story.title });
     }
 
     // Data tags alone cannot purge rendered pages (page entries only carry

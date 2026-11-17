@@ -6,7 +6,7 @@ import { getDhakaTimeISO } from "@/lib/story-formatter";
 import { clearPostsCache } from "@/lib/posts";
 import { revalidateStoryPaths } from "@/lib/revalidate-stories";
 import { getUnusedCover, normalizeCoverUrl } from "@/lib/cover";
-import { announceStoryPublished } from "@/lib/chat-system";
+import { broadcastPublish } from "@/lib/publish-broadcast";
 import { checkStorySimilarity } from "@/lib/similarity";
 import { notifyAdmins } from "@/lib/notify";
 import { mintPublicSlug } from "@/lib/public-slug-assign";
@@ -255,14 +255,18 @@ export async function POST(req: Request) {
       updated_at: new Date().toISOString()
     };
 
+    // Read the row BEFORE the upsert: the published_at preservation below AND
+    // the go-live broadcast check both need the previous state — for every
+    // role (trusted authors auto-publish too), not just admins.
+    const { data: existingStory } = await supabase
+      .from("stories")
+      .select("uid, published_at, status")
+      .or(`slug.eq.${uniqueUid},uid.eq.${uniqueUid}`)
+      .maybeSingle();
+
     if (isAdmin) {
       // Preserve the original publish date on edits; only stamp published_at
       // when this is a brand-new story so re-edits don't bump it to the top.
-      const { data: existingStory } = await supabase
-        .from("stories")
-        .select("uid, published_at")
-        .or(`slug.eq.${uniqueUid},uid.eq.${uniqueUid}`)
-        .maybeSingle();
       if (!existingStory?.published_at) {
         storyPayload.published_at = nowIso;
       }
@@ -360,12 +364,30 @@ export async function POST(req: Request) {
       try { revalidateStoryPaths(uniqueSlug, uniqueUid, publicSlug || null); } catch {}
     }
 
-    // Announce in the Global Community Chat when an admin publishes the
-    // story. Routed through the shared helper so the message is a system
-    // row with an absolute link, matching the video and gallery
-    // announcements.
-    if (isAdmin) {
-      await announceStoryPublished(uniqueUid, safeTitle);
+    // Broadcast the go-live — global chat message AND community-feed auto
+    // post, fired together (lib/publish-broadcast.ts). Only real transitions:
+    //   • brand-new story going out as published (admin direct publish OR a
+    //     trusted author's auto-publish — both are public launches);
+    //   • a scheduled story whose schedule was just cleared (live NOW).
+    // Future schedules wait for the cron route, and routine edits of an
+    // already-live story must not re-announce it on every save.
+    const wasFutureScheduled =
+      !!existingStory?.published_at &&
+      new Date(existingStory.published_at).getTime() > Date.now();
+    const goesLiveNow =
+      storyPayload.status === "published" &&
+      (!storyPayload.scheduled_at ||
+        new Date(storyPayload.scheduled_at).getTime() <= Date.now()) &&
+      (!existingStory ||
+        existingStory.status !== "published" ||
+        (scheduledAt === null && wasFutureScheduled));
+    if (goesLiveNow) {
+      await broadcastPublish({
+        kind: "story",
+        id: String(uniqueUid),
+        title: safeTitle,
+        actorId: session.id,
+      });
     }
 
     return NextResponse.json({

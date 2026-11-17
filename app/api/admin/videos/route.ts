@@ -8,7 +8,7 @@ import { extractIframeMetadata, extractSourceUrl, normalizeVideoUrl } from "@/li
 import { resolveEmbed } from "@/lib/embed-resolver";
 import { validateEmbedUrl } from "@/lib/embed-validator";
 import { extractUploaderFromDescription } from "@/lib/uploader-from-description";
-import { announceVideoPublished } from "@/lib/chat-system";
+import { broadcastPublish } from "@/lib/publish-broadcast";
 import { resolvePublishState, resolveSchedulePatch } from "@/lib/media-schedule";
 import { videoSourceKey } from "@/lib/video-source-url";
 import { CACHE_TAGS, invalidateTags } from "@/lib/cache";
@@ -367,14 +367,15 @@ export async function POST(request: Request) {
     // verdict in the response and decides what to do.
     const warning = await buildEmbedWarning(embedUrl);
 
-    // Announce the new video in the global chat. Never blocks the response:
-    // `announceVideoPublished` swallows its own failures.
+    // Broadcast the new video — global chat message AND community-feed auto
+    // post, fired together. Never blocks the response: `broadcastPublish`
+    // swallows its own failures.
     //
-    // A scheduled video is NOT announced here — the announcement belongs to
-    // the moment it actually goes live, which is the cron route's job.
+    // A scheduled video is NOT broadcast here — it belongs to the moment it
+    // actually goes live, which is the cron route's job.
     const scheduled = !!publishState.scheduled_at;
     if (!scheduled) {
-      await announceVideoPublished(data.id, title);
+      await broadcastPublish({ kind: "video", id: data.id, title, actorId: session.id });
     }
 
     invalidateTags(CACHE_TAGS.videos);
@@ -536,7 +537,7 @@ export async function PATCH(request: Request) {
         update.title &&
         !endsScheduled
       ) {
-        await announceVideoPublished(id, String(update.title));
+        await broadcastPublish({ kind: "video", id, title: String(update.title), actorId: session.id });
       }
 
       return NextResponse.json({
@@ -601,7 +602,7 @@ export async function PATCH(request: Request) {
     if (error) throw error;
 
     if (titleForAnnounce) {
-      await announceVideoPublished(id, titleForAnnounce);
+      await broadcastPublish({ kind: "video", id, title: titleForAnnounce, actorId: session.id });
     }
 
     invalidateTags(CACHE_TAGS.videos);

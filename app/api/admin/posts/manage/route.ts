@@ -9,7 +9,7 @@ import { canDeletePermanently, canHideContent, hasPermission } from "@/lib/permi
 import { logAudit, logAuditCritical } from "@/lib/audit";
 import { notifyAdmins, notifyUser } from "@/lib/notify";
 import { assignPublicSlug } from "@/lib/public-slug-assign";
-import { announceStoryPublished } from "@/lib/chat-system";
+import { broadcastPublish } from "@/lib/publish-broadcast";
 import {
   revalidateStoryPaths,
   revalidateStoryListingPaths,
@@ -72,16 +72,13 @@ async function upsertPostMetadata(
   }
 }
 
-// Posts an automated announcement to the Global Community Chat when a new
-// story is published.
-//
-// Routed through `announceStoryPublished` so the message is a real system
-// row (the blue "সিস্টেম" pill) with an absolute link, matching the video
-// and gallery announcements. The helper swallows its own failures — a chat
-// blip must never fail the publish.
-async function sendGlobalChatAnnouncement(postSlug: string, postTitle: string, postUid?: string) {
+// Broadcasts a story going live: the Global Community Chat gets a system
+// message (blue "সিস্টেম" pill, absolute link) AND the community feed gets an
+// auto post — both fired together by lib/publish-broadcast.ts. The helper
+// swallows its own failures — a chat/feed blip must never fail the publish.
+async function broadcastStoryPublish(postSlug: string, postTitle: string, postUid?: string, actorId?: string) {
   const targetPath = postUid || postSlug;
-  await announceStoryPublished(targetPath, postTitle);
+  await broadcastPublish({ kind: "story", id: targetPath, title: postTitle, actorId });
 }
 
 export async function POST(req: Request) {
@@ -117,7 +114,7 @@ export async function POST(req: Request) {
         // stories but leave them without a slug.
         const { data: toPublish, error: bulkError } = await supabase
           .from("stories")
-          .select("uid, title, slug, author_id, category, published_at, public_slug")
+          .select("uid, title, slug, author_id, category, published_at, public_slug, status")
           .in("uid", uids);
         if (bulkError) throw bulkError;
 
@@ -146,7 +143,11 @@ export async function POST(req: Request) {
             story.published_at || getDhakaTimeISO(),
           );
           revalidateStoryPaths(story.slug, story.uid, publicSlug);
-          await sendGlobalChatAnnouncement(story.slug, story.title, story.uid);
+          // Chat + feed broadcast only for stories that were NOT already live
+          // — bulk-publishing an already-published row is not news.
+          if (story.status !== "published") {
+            await broadcastStoryPublish(story.slug, story.title, story.uid, session.id);
+          }
         }
       } else if (bulkAction === "delete") {
         if (canDeletePermanently(role)) {
@@ -236,7 +237,12 @@ export async function POST(req: Request) {
       await upsertPostMetadata(dbStory.uid, dbStory.slug, dbStory.author_id, "published", dbStory.category, dbStory.published_at || nowIso);
       await autoCleanAuthorPendingDuplicates(supabase, dbStory.author_id, dbStory.id, dbStory.title);
       await sendNotif(dbStory.author_id, "story_approved", dbStory.slug, `আপনার গল্প "${dbStory.title}" অনুমোদিত ও প্রকাশিত হয়েছে!`);
-      await sendGlobalChatAnnouncement(dbStory.slug, dbStory.title, dbStory.uid);
+      // Broadcast only on a real go-live (pending/rejected/draft → published);
+      // re-approving an already-live story would duplicate the chat message
+      // AND the feed post.
+      if (dbStory.status !== "published") {
+        await broadcastStoryPublish(dbStory.slug, dbStory.title, dbStory.uid, session.id);
+      }
       revalidateStoryPaths(dbStory.slug, dbStory.uid, publicSlug);
       clearPostsCache();
       logAudit(session, { action: "story.approve", targetType: "story", targetId: dbStory.uid, prevState: { status: dbStory.status }, newState: { status: "published" } });
@@ -317,7 +323,12 @@ export async function POST(req: Request) {
       await upsertPostMetadata(dbStory.uid, dbStory.slug, effectiveAuthorId, "published", newCategory, dbStory.published_at || nowIso);
       await autoCleanAuthorPendingDuplicates(supabase, effectiveAuthorId, dbStory.id, newTitle);
       await sendNotif(effectiveAuthorId, "story_approved", dbStory.slug, `অ্যাডমিন আপনার গল্প "${newTitle}" সম্পাদন করে প্রকাশ করেছেন!`, dbStory.id);
-      await sendGlobalChatAnnouncement(dbStory.slug, newTitle, dbStory.uid);
+      // Broadcast only when this edit actually took the story LIVE (draft/
+      // pending → published). Editing an already-published story must not
+      // re-announce it to chat and the feed.
+      if (dbStory.status !== "published") {
+        await broadcastStoryPublish(dbStory.slug, newTitle, dbStory.uid, session.id);
+      }
       revalidateStoryPaths(dbStory.slug, dbStory.uid, publicSlug);
       clearPostsCache();
 
