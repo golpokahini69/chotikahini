@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { getSession } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { CACHE_TAGS, cachedRead } from "@/lib/cache";
+import { getViewTotals } from "@/lib/view-totals";
 
 /**
  * GET /api/admin/stats — dashboard overview numbers.
@@ -240,7 +241,12 @@ export async function GET() {
   const canSeeUserStats = hasPermission(session.role, "users.view");
 
   try {
-    const payload = await readStatsBatch();
+    // Real aggregate counters, read fresh on every request (single-flight
+    // per render, no persistent cache) so the admin panel can never show a
+    // number left over from a previous deployment or an old cache window —
+    // that stale-cache path is exactly why local and production disagreed.
+    // Null-safe per source: no estimates, ever.
+    const [payload, viewTotals] = await Promise.all([readStatsBatch(), getViewTotals()]);
 
     return NextResponse.json({
       totalUsers: canSeeUserStats ? payload.totalUsers : undefined,
@@ -253,6 +259,9 @@ export async function GET() {
       scheduledStories: payload.scheduledStories,
       scheduledVideos: payload.scheduledVideos,
       scheduledPictures: payload.scheduledPictures,
+      // Real aggregate counters: stories / videos / pictures / site total.
+      // null per source when it could not be read.
+      viewTotals,
     });
   } catch (error) {
     console.error("Failed to fetch admin stats:", error);

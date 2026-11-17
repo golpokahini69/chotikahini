@@ -356,7 +356,10 @@ export async function GET(req: Request) {
     //   5. URL slug, humanised
     // 1. og:title / twitter:title  (most reliable, machine-readable)
     const ogTitle = metaValue(html, ["og:title", "twitter:title"]);
-    const rawTitleTag = html.match(/<title[^>]*>([\s\S]{1,300}?)<\/title>/i)?.[1]?.trim() ?? null;
+    const rawTitleTag = (() => {
+      const raw = html.match(/<title[^>]*>([\s\S]{1,300}?)<\/title>/i)?.[1]?.trim();
+      return raw ? decodeEntities(raw) : null;
+    })();
 
     let title = !isPlaceholderTitle(ogTitle) ? ogTitle : null;
     if (!title && !isPlaceholderTitle(rawTitleTag)) title = rawTitleTag;
@@ -448,6 +451,7 @@ export async function GET(req: Request) {
         embedUrl: resolved?.embedUrl ?? normalized,
         provider: resolved?.provider ?? null,
         resolvedFrom: candidate,
+        reason: null,
       });
       }
     }
@@ -459,6 +463,15 @@ export async function GET(req: Request) {
   // watch-page URL into the provider's official embed URL with no scraping.
   const resolved =
     resolveEmbed(sourceUrl || normalized || "") ?? resolvedForFetch;
+
+  // Say WHY the fields are empty instead of returning silent nulls. A ~1 KB
+  // embed page whose <title> is the provider's stock "… embed video" string
+  // means the video is gone/private/geo-blocked — there is no title to
+  // extract anywhere. A normal-sized page simply had no usable title. The
+  // admin form turns these into a clear hint.
+  const embedWasPlaceholder =
+    !embedHtml || embedHtml.length < 2000;
+
   return NextResponse.json({
     title: slugTitle || fromEmbed?.title || null,
     thumbnail: fromEmbed?.thumbnail || null,
@@ -467,5 +480,10 @@ export async function GET(req: Request) {
     embedUrl: resolved?.embedUrl ?? embedTarget,
     provider: resolved?.provider ?? null,
     uploaderName: fromEmbed?.uploader ?? null,
+    reason: slugTitle || fromEmbed?.title
+      ? null
+      : embedWasPlaceholder
+        ? "link_unavailable"
+        : "no_title_on_page",
   });
 }

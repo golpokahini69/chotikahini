@@ -1131,6 +1131,73 @@ return (
                 </div>
               </div>
 
+              {/* ── Real view totals ───────────────────────────────────────
+                  Exactly what the public homepage shows, from the same
+                  helper (lib/view-totals.ts) so the two can never drift.
+                  Each is a live aggregate counter; `—` means that source
+                  could not be read, and the site total also shows `—`
+                  unless all three parts are known (a partial sum would be
+                  a made-up number). */}
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {[
+                  {
+                    label: "গল্প ভিউ",
+                    value: stats?.viewTotals?.stories ?? null,
+                    icon: <Eye className="w-4 h-4" />,
+                    tone: "text-blue-600 dark:text-blue-400",
+                    box: "border-blue-200/60 dark:border-blue-900/40",
+                  },
+                  {
+                    label: "ভিডিও ভিউ",
+                    value: stats?.viewTotals?.videos ?? null,
+                    icon: <Activity className="w-4 h-4" />,
+                    tone: "text-rose-600 dark:text-rose-400",
+                    box: "border-rose-200/60 dark:border-rose-900/40",
+                  },
+                  {
+                    label: "ছবি ভিউ",
+                    value: stats?.viewTotals?.pictures ?? null,
+                    icon: <Eye className="w-4 h-4" />,
+                    tone: "text-emerald-600 dark:text-emerald-400",
+                    box: "border-emerald-200/60 dark:border-emerald-900/40",
+                  },
+                  {
+                    label: "সাইট মোট ভিউ",
+                    value: stats?.viewTotals?.site ?? null,
+                    icon: <TrendingUp className="w-4 h-4" />,
+                    tone: "text-indigo-600 dark:text-indigo-400",
+                    box: "border-indigo-300/70 dark:border-indigo-800/60",
+                  },
+                ].map((item, index) => {
+                  const isSite = index === 3;
+                  return (
+                    <div
+                      key={item.label}
+                      className={`rounded-2xl border ${item.box} bg-surface-alt p-4 shadow-xs ${
+                        isSite ? "ring-1 ring-indigo-500/20" : ""
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-fg-muted truncate">
+                          {item.label}
+                        </span>
+                        <span className={`shrink-0 ${item.tone}`}>{item.icon}</span>
+                      </div>
+                      <p className={`mt-2 text-2xl font-black tracking-tight tabular-nums ${item.tone}`}>
+                        {item.value === null
+                          ? "—"
+                          : `${enToBnNumber(item.value)} ভিউ`}
+                      </p>
+                      {isSite ? (
+                        <p className="mt-0.5 text-[10.5px] text-fg-subtle truncate">
+                          গল্প + ভিডিও + ছবি
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+
               {/* Visitor Analytics — only visible with analytics.view (admin / superadmin) */}
               {hasPerm(user?.role, "analytics.view") && (
               <div className="bg-surface-alt rounded-2xl border border-border shadow-sm p-5 space-y-5">

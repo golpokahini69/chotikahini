@@ -24,6 +24,36 @@ export interface ScrapedEmbed {
   description: string | null;
 }
 
+/**
+ * Decode the HTML entities providers embed inside their player JS strings.
+ *
+ * xvideos ships `html5player.setVideoTitle('Alia Bhatt&#039;s …')` — the
+ * value is already inside a JS string, but still HTML-entity-escaped. The
+ * old `readCall` only undid JS escapes (`\'`, `\/`), so the admin panel
+ * showed the literal text `Alia Bhatt&#039;s` in the title field.
+ */
+function decodeEntities(value: string): string {
+  return value
+    .replace(/&#(\d+);/g, (_m, code) => {
+      const n = Number(code);
+      return Number.isFinite(n) && n > 0 && n <= 0x10ffff
+        ? String.fromCodePoint(n)
+        : "";
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_m, code) => {
+      const n = parseInt(code, 16);
+      return Number.isFinite(n) && n > 0 && n <= 0x10ffff
+        ? String.fromCodePoint(n)
+        : "";
+    })
+    .replace(/&quot;/g, '"')
+    .replace(/&#0*39;|&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
+}
+
 /** Pull a quoted JS string argument out of `setXxx('…')` calls. */
 function readCall(html: string, fnNames: string[]): string | null {
   for (const name of fnNames) {
@@ -35,11 +65,13 @@ function readCall(html: string, fnNames: string[]): string | null {
     const m = html.match(re);
     const value = m ? (m[1] ?? m[2]) : null;
     if (value) {
-      const decoded = value
-        .replace(/\\(['"\\])/g, "$1")
-        .replace(/\\\//g, "/")
-        .replace(/\\n/g, " ")
-        .trim();
+      const decoded = decodeEntities(
+        value
+          .replace(/\\(['"\\])/g, "$1")
+          .replace(/\\\//g, "/")
+          .replace(/\\n/g, " ")
+          .trim(),
+      ).trim();
       if (decoded) return decoded;
     }
   }
