@@ -124,6 +124,35 @@ export function markCounted(key: string, windowMs: number): void {
 }
 
 /**
+ * Claim a dedupe key BEFORE the database write, for counters that have no
+ * database-side unique key (story views).
+ *
+ * Why a claim is needed: `isCounted` only records a hit after the write
+ * succeeds, so two requests racing (React StrictMode double-effect, or a
+ * double-mounted component) both see "not counted yet" and both write —
+ * the view increments twice. Claiming first makes the second request lose
+ * the race, and because a claim is provisional it must be released again if
+ * the write fails, so the very next request can retry instead of silently
+ * swallowing the view.
+ *
+ * `false` means someone else already claimed/recorded it in this window —
+ * the caller must NOT write.
+ */
+export function claimDedupe(key: string, windowMs: number): boolean {
+  const now = Date.now();
+  const until = seen.get(key);
+  if (until !== undefined && until > now) return false;
+  seen.set(key, now + windowMs);
+  evictIfFull(seen);
+  return true;
+}
+
+/** Undo a claim after a failed write so a later request can retry. */
+export function releaseDedupe(key: string): void {
+  seen.delete(key);
+}
+
+/**
  * Build the per-viewer dedupe key for a request.
  *
  * Prefers the client's stable `visitorId` (the same id story views use),

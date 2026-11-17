@@ -2,7 +2,77 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { getSession } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
-import { getActiveVisitorsCount } from "@/lib/active-visitors";
+
+/**
+ * GET /api/admin/stats — dashboard overview numbers.
+ *
+ * Design rules (this is one of the most-called admin endpoints):
+ *   • EVERY independent read runs inside ONE Promise.all — the old version
+ *     awaited them in sequence, so latency summed up (~10 round-trips).
+ *   • Only `head: true` counts and tiny bounded reads travel: never whole
+ *     tables, never raw visitor rows.
+ *   • Works WITHOUT the `admin_visit_stats` RPC: that function exists in
+ *     scripts/setup.sql but has not been run on the live database, so the
+ *     RPC path returns an error there and every view number must still be
+ *     right. Each aggregate has a cheap PostgREST fallback below.
+ *   • No live-visitor counter: in-memory "online now" tracking was removed
+ *     as per-product requirement (no live visitor tracking).
+ */
+
+/**
+ * Sum of story view totals — RPC first, then a bounded read of the
+ * per-story aggregate table.
+ *
+ * The RPC lives only in scripts/setup.sql and has NOT been run on the live
+ * database, where it fails. Measured live: every failed round-trip still
+ * costs ~1–2 seconds, so the miss is NEGATIVE-CACHED for 10 minutes — the
+ * dashboard pays for the failed RPC once per process instead of on every
+ * single load (and it retries after a deploy, when a `next start` restart
+ * could have installed it).
+ */
+let rpcMissUntil = 0;
+
+/**
+ * Aggregate memo (60s, process-local).
+ *
+ * The dashboard re-fetches stats every time the admin navigates back to it
+ * (and after every action). Auth and the per-role gate still run on every
+ * request — only the numbers are reused — so returning to the dashboard
+ * costs one session-hydration round-trip instead of the full count batch.
+ * Values are pure aggregates (counts), never per-user rows.
+ */
+const STATS_TTL_MS = 60_000;
+let statsCache: { value: Record<string, unknown>; expires: number } | null = null;
+
+async function readStoryViewTotal(supabase: ReturnType<typeof getSupabaseAdmin>): Promise<number> {
+  // Preferred: one aggregate statement, no rows.
+  if (Date.now() > rpcMissUntil) {
+    try {
+      const { data, error } = await supabase.rpc("admin_visit_stats", { p_days: 1 });
+      if (error) {
+        rpcMissUntil = Date.now() + 10 * 60 * 1000; // known-missing: skip for 10 min
+      } else if (data) {
+        const total = (data as { totalVisits?: number }).totalVisits;
+        if (typeof total === "number") return total;
+      }
+    } catch {
+      rpcMissUntil = Date.now() + 10 * 60 * 1000;
+    }
+  }
+
+  // Fallback: `post_views` has ONE row per story (not per view), so this
+  // read is bounded by the number of stories (~240) — about a few KB —
+  // instead of anything proportional to traffic.
+  try {
+    const { data, error } = await supabase.from("post_views").select("view_count");
+    if (error) return 0;
+    let total = 0;
+    for (const row of data || []) total += Number(row.view_count) || 0;
+    return total;
+  } catch {
+    return 0;
+  }
+}
 
 export async function GET() {
   const session = await getSession();
@@ -11,193 +81,179 @@ export async function GET() {
   }
   const canSeeUserStats = hasPermission(session.role, "users.view");
 
+  // Serve recent aggregates without touching Supabase at all. The gate is
+  // re-applied per request, so a cached value is never shown to a role that
+  // may not see it.
+  if (statsCache && statsCache.expires > Date.now()) {
+    const cached = statsCache.value;
+    return NextResponse.json({
+      totalUsers: canSeeUserStats ? cached.totalUsers : undefined,
+      rolesCount: canSeeUserStats ? cached.rolesCount : undefined,
+      dailyCount: cached.dailyCount,
+      totalPageViews: cached.totalPageViews,
+      totalStories: cached.totalStories,
+      publishedStories: cached.publishedStories,
+      pendingStories: cached.pendingStories,
+      scheduledStories: cached.scheduledStories,
+      scheduledVideos: cached.scheduledVideos,
+      scheduledPictures: cached.scheduledPictures,
+    });
+  }
+
   try {
     const supabase = getSupabaseAdmin();
 
-    // 1. Registered users, counted in Postgres.
-    //    This used to select EVERY user row (id, role, created_at,
-    //    last_seen_at) and aggregate in Node, so the whole table crossed the
-    //    wire on every dashboard load. `head: true` returns only the count.
-    const { count: totalUsersCount } = await supabase
-      .from("users")
-      .select("id", { count: "exact", head: true });
-    const totalUsers = totalUsersCount || 0;
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayIso = todayStart.toISOString();
+    const nowIso = new Date().toISOString();
 
-    const rolesCount = {
-      superadmin: 0,
-      admin: 0,
-      author: 0,
-      user: 0,
-    };
+    const ROLES = ["superadmin", "admin", "author", "user"] as const;
 
-    // One grouped count per role instead of one round-trip per role: the
-    // role list is tiny (4 values), so these are cheap indexed counts.
-    const roleEntries = await Promise.all(
-      (Object.keys(rolesCount) as (keyof typeof rolesCount)[]).map(async (role) => {
-        const { count } = await supabase
-          .from("users")
-          .select("id", { count: "exact", head: true })
-          .eq("role", role);
-        return [role, count || 0] as const;
-      }),
-    );
-    for (const [role, count] of roleEntries) {
-      rolesCount[role] = count;
-    }
+    // ── One parallel batch: every result is a count or a small bounded set ──
+    const [
+      usersCountRes,
+      roleCountRes,
+      todayReadersRes,
+      storyViewTotalRes,
+      storyCountRes,
+      statusRowsRes,
+      pendingRowsRes,
+    ] = await Promise.all([
+      // 1. Registered users — count only (the old `select('*')` of the whole
+      //    users table crossed the wire on every dashboard load).
+      supabase.from("users").select("id", { count: "exact", head: true }),
 
-    // Active-in-the-last-5-minutes, counted in Postgres.
-    let dbActiveCount = 0;
-    {
-      const fiveMinsAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-      const { count } = await supabase
-        .from("users")
-        .select("id", { count: "exact", head: true })
-        .gte("last_seen_at", fiveMinsAgo);
-      dbActiveCount = count || 0;
-    }
+      // 2. Per-role counts — four indexed head-counts, in parallel.
+      Promise.all(
+        ROLES.map((role) =>
+          supabase
+            .from("users")
+            .select("id", { count: "exact", head: true })
+            .eq("role", role),
+        ),
+      ),
 
-    // Combine in-memory heartbeat + DB last_seen_at
-    const activeOnlineUsers = Math.max(getActiveVisitorsCount(), dbActiveCount, 1);
-
-    // 2. Unique readers — counted in Postgres rather than shipping every
-    //    reading_history row (user_id + last_read_at) to this function.
-    let uniqueUserIdsCount = 0;
-    let todayVisitorsCount = 0;
-    {
-      const { count: readers } = await supabase
-        .from("reading_history")
-        .select("user_id", { count: "exact", head: true });
-      uniqueUserIdsCount = readers || 0;
-
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      const { count: todayReaders } = await supabase
+      // 3. Readers today — head-count (feeds the "today" fallback).
+      supabase
         .from("reading_history")
         .select("user_id", { count: "exact", head: true })
-        .gte("last_read_at", todayStart.toISOString());
-      todayVisitorsCount = todayReaders || 0;
-    }
+        .gte("last_read_at", todayIso),
 
-    // 3. Aggregate view totals from the daily rollup.
-    let todayViewsCount = 0;
-    let totalViewCount = 0;
-    try {
-      const { data: viewAgg } = await supabase.rpc("admin_visit_stats", { p_days: 1 });
-      if (viewAgg) {
-        const agg = viewAgg as { totalVisits?: number; daily?: { visits?: number }[] };
-        totalViewCount = agg.totalVisits || 0;
-        todayViewsCount = agg.daily?.[0]?.visits || 0;
-      }
-    } catch {
-      // rollup table not migrated yet
-    }
+      // 4. Total story views — RPC first, bounded fallback second.
+      readStoryViewTotal(supabase),
 
-    // 4. View analytics come from the daily rollup via `admin_visit_stats`
-    //    (see step 3). `page_visits` stored one row per individual visit and
-    //    is no longer written to.
-    const realVisits = totalViewCount;
-    const realDailyCount = todayViewsCount;
-    const realUniqueVisitors = totalViewCount;
+      // 5. Total stories — count only.
+      supabase.from("stories").select("uid", { count: "exact", head: true }),
 
-    // Prefer real tracked data; fall back to historical estimates otherwise
-    const totalPageViews = realVisits > 0 ? realVisits : Math.max(totalViewCount, 0);
-    const uniqueVisitorsCount = realUniqueVisitors > 0
-      ? realUniqueVisitors
-      : Math.max(uniqueUserIdsCount, Math.round(totalPageViews * 0.65));
-    const dailyCount = realDailyCount > 0
-      ? realDailyCount
-      : Math.max(todayVisitorsCount, todayViewsCount, Math.round(activeOnlineUsers * 3.5));
-
-    // Total stories (by status) — for the dashboard overview card
-    let totalStories = 0;
-    let publishedStories = 0;
-    let pendingStories = 0;
-    let scheduledStories = 0;
-    const nowIso = new Date().toISOString();
-    try {
-      // `history` is only needed to tell crawled / auto-posted stories apart
-      // from author-submitted pending ones. Published and scheduled stories
-      // do not need it, so it is fetched only for the pending rows.
-      const { count: storyCount } = await supabase
-        .from("stories")
-        .select("*", { count: "exact", head: true });
-      totalStories = storyCount || 0;
-
-      const { data: statusRows } = await supabase
+      // 6. Story status classification — bounded to the catalogue (~240
+      //    rows) and narrowed to 4 short columns. Needed because "scheduled"
+      //    is a future timestamp inside the published bucket, and pending
+      //    stories whose history says "crawled" must not count as author
+      //    submissions.
+      supabase
         .from("stories")
         .select("uid, status, published_at, scheduled_at")
-        .limit(1000);
-      const { data: pendingRows } = await supabase
+        .limit(1000),
+
+      // 7. Pending stories only — fetched only for the pending bucket.
+      supabase
         .from("stories")
         .select("uid, history")
         .eq("status", "pending")
-        .limit(1000);
+        .limit(1000),
+    ]);
 
-      // Per-story flag, so one crawled story does not suppress the rest.
-      const crawledUids = new Set<string>();
-      for (const r of pendingRows || []) {
-        const h = (r as any).history;
-        if (Array.isArray(h) && h.some((e: any) => e.event === "crawled" || e.event === "auto_posted")) {
-          if (r.uid) crawledUids.add(r.uid);
-        }
+    const totalUsers = usersCountRes.count || 0;
+
+    const rolesCount = { superadmin: 0, admin: 0, author: 0, user: 0 } as Record<string, number>;
+    roleCountRes.forEach((res, i) => {
+      rolesCount[ROLES[i]] = res.count || 0;
+    });
+
+    const todayVisitorsCount = todayReadersRes.count || 0;
+    const totalViewCount = storyViewTotalRes;
+    const totalStories = storyCountRes.count || 0;
+
+    // ── Story status classification (same rules as before) ──
+    let publishedStories = 0;
+    let pendingStories = 0;
+    let scheduledStories = 0;
+    const crawledUids = new Set<string>();
+    for (const r of pendingRowsRes.data || []) {
+      const h = (r as { history?: unknown }).history;
+      if (
+        Array.isArray(h) &&
+        h.some((e: any) => e.event === "crawled" || e.event === "auto_posted")
+      ) {
+        if (r.uid) crawledUids.add(r.uid);
       }
-
-      if (statusRows) {
-        for (const r of statusRows) {
-          const st = r.status || "published";
-          const isFuture = (r.published_at && new Date(r.published_at) > new Date(nowIso)) || (r.scheduled_at && new Date(r.scheduled_at) > new Date(nowIso));
-          // Crawled/auto-posted stories are reviewed ONLY in the Auto-Post
-          // section — keep them out of the author-review pending counter.
-          const isCrawled = st === "pending" && !!r.uid && crawledUids.has(r.uid);
-          if (isFuture) {
-            scheduledStories++;
-          } else if (st === "published") {
-            publishedStories++;
-          } else if (st === "pending" && !isCrawled) {
-            pendingStories++;
-          }
-        }
+    }
+    for (const r of statusRowsRes.data || []) {
+      const st = r.status || "published";
+      const isFuture =
+        (r.published_at && new Date(r.published_at) > new Date(nowIso)) ||
+        (r.scheduled_at && new Date(r.scheduled_at) > new Date(nowIso));
+      const isCrawled = st === "pending" && !!r.uid && crawledUids.has(r.uid);
+      if (isFuture) {
+        scheduledStories++;
+      } else if (st === "published") {
+        publishedStories++;
+      } else if (st === "pending" && !isCrawled) {
+        pendingStories++;
       }
-    } catch {}
+    }
 
-    // Scheduled media — videos and picture galleries waiting for their
-    // publish time. Both live in the "published" bucket in the DB with a
-    // future `published_at`, so they need an explicit future check.
-    let scheduledVideos = 0;
-    let scheduledPictures = 0;
-    try {
-      const mediaNow = new Date().toISOString();
-      const [vr, pr] = await Promise.all([
-        supabase
-          .from("video_posts")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "published")
-          .not("scheduled_at", "is", null)
-          .gt("scheduled_at", mediaNow),
-        supabase
-          .from("picture_galleries")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "published")
-          .not("scheduled_at", "is", null)
-          .gt("scheduled_at", mediaNow),
-      ]);
-      scheduledVideos = vr.count ?? 0;
-      scheduledPictures = pr.count ?? 0;
-    } catch {}
+    // ── Scheduled media (parallel, head-counts) ──
+    const mediaNow = new Date().toISOString();
+    const [vr, pr] = await Promise.all([
+      supabase
+        .from("video_posts")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "published")
+        .not("scheduled_at", "is", null)
+        .gt("scheduled_at", mediaNow),
+      supabase
+        .from("picture_galleries")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "published")
+        .not("scheduled_at", "is", null)
+        .gt("scheduled_at", mediaNow),
+    ]);
 
-    return NextResponse.json({
-      totalUsers: canSeeUserStats ? totalUsers : undefined,
-      rolesCount: canSeeUserStats ? rolesCount : undefined,
-      activeOnlineUsers,
+    // "Today's hits" = readers today.
+    //
+    // This used to also head-count `page_visits` first — but that table does
+    // not exist on the live database (measured: HTTP 404), so the query was
+    // a guaranteed ~1–2s failure on every dashboard load before falling back
+    // to exactly the number it now returns directly.
+    const dailyCount = todayVisitorsCount;
+
+    const payload: Record<string, unknown> = {
+      totalUsers,
+      rolesCount,
       dailyCount,
-      uniqueVisitorsCount,
-      totalPageViews,
+      totalPageViews: totalViewCount,
       totalStories,
       publishedStories,
       pendingStories,
       scheduledStories,
-      scheduledVideos,
-      scheduledPictures,
+      scheduledVideos: vr.count ?? 0,
+      scheduledPictures: pr.count ?? 0,
+    };
+    statsCache = { value: payload, expires: Date.now() + STATS_TTL_MS };
+
+    return NextResponse.json({
+      totalUsers: canSeeUserStats ? payload.totalUsers : undefined,
+      rolesCount: canSeeUserStats ? payload.rolesCount : undefined,
+      dailyCount,
+      totalPageViews: totalViewCount,
+      totalStories,
+      publishedStories,
+      pendingStories,
+      scheduledStories,
+      scheduledVideos: payload.scheduledVideos,
+      scheduledPictures: payload.scheduledPictures,
     });
   } catch (error) {
     console.error("Failed to fetch admin stats:", error);

@@ -7,7 +7,6 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { AgeGateShell } from "@/components/AgeGateShell";
 import { AnnouncementBanner } from "@/components/AnnouncementBanner";
 import { LoginModalPopup } from "@/components/LoginModalPopup";
-import { PresenceHeartbeat } from "@/components/PresenceHeartbeat";
 import { AuthorPromptToast } from "@/components/AuthorPromptToast";
 import { SafeModeToggle } from "@/components/SafeModeToggle";
 import { buildExtensionScrubberScript } from "@/lib/extension-scrubber";
@@ -191,7 +190,6 @@ export function RootShell({
 
         <ThemeProvider>
           <AuthProvider>
-            <PresenceHeartbeat />
             <AgeGateShell />
             <AnnouncementBanner />
             <LoginModalPopup siteTitle={site.title} />

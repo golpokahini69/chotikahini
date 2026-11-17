@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { buildViewerKey, getCachedCount, isCounted, markCounted, setCachedCount } from "@/lib/view-count";
+import { buildViewerKey, claimDedupe, getCachedCount, isCounted, releaseDedupe, setCachedCount } from "@/lib/view-count";
 
 /**
  * Story view counter.
@@ -121,8 +121,20 @@ export async function POST(req: Request) {
     const viewerKey = buildViewerKey(req, visitorId);
     const dedupeKey = `story:${cleanSlug}:${viewerKey}`;
 
-    // Already counted for this reader in this window → memory only.
+    // Fast path: already counted for this reader in this window.
     if (isCounted(dedupeKey)) {
+      return NextResponse.json({
+        success: true,
+        views: getCachedCount(cacheKey(cleanSlug)) ?? 0,
+        incremented: false,
+      });
+    }
+
+    // CLAIM before writing. Story views have no database-side unique key
+    // (unlike video/picture views), so two requests racing — StrictMode's
+    // double-effect, a remount, a duplicated tracker — would both pass the
+    // check above and both increment. The loser of the claim never writes.
+    if (!claimDedupe(dedupeKey, STORY_DEDUPE_MS)) {
       return NextResponse.json({
         success: true,
         views: getCachedCount(cacheKey(cleanSlug)) ?? 0,
@@ -133,8 +145,9 @@ export async function POST(req: Request) {
     const next = await incrementInDatabase(cleanSlug);
 
     if (next === null) {
-      // The write failed: leave the reader unmarked so the next page load
-      // retries instead of losing the view permanently.
+      // Write failed: undo the claim so the next request retries instead of
+      // swallowing the view forever.
+      releaseDedupe(dedupeKey);
       return NextResponse.json({
         success: true,
         views: getCachedCount(cacheKey(cleanSlug)) ?? 0,
@@ -142,7 +155,6 @@ export async function POST(req: Request) {
       });
     }
 
-    markCounted(dedupeKey, STORY_DEDUPE_MS);
     setCachedCount(cacheKey(cleanSlug), next);
 
     return NextResponse.json({ success: true, views: next, incremented: true });

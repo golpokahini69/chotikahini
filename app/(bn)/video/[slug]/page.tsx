@@ -85,7 +85,14 @@ export default async function VideoPublicPage({ params }: VideoPageProps) {
 
   return (
     <main className="min-h-[70vh] pb-16">
-      <VideoViewTracker videoId={video.id} />
+      {/* Counts only after the player is on screen for 2s AND the viewer
+          really engages with it (or the embed autoplays) — never on load.
+          See components/VideoViewTracker.tsx for the full rule. */}
+      <VideoViewTracker
+        videoId={video.id}
+        targetId="video-player"
+        autoplay={/(\?|&)autoplay=1/.test(video.embed_url || "")}
+      />
 
       <div className="container-page pt-4 sm:pt-6">
         <Link
@@ -103,7 +110,7 @@ export default async function VideoPublicPage({ params }: VideoPageProps) {
         {/* ---------- Primary column ---------- */}
         <div className="min-w-0">
           <div className="overflow-hidden rounded-2xl bg-black shadow-xl ring-1 ring-black/10">
-            <div className="aspect-video w-full">
+            <div id="video-player" className="aspect-video w-full">
               <iframe
                 src={video.embed_url}
                 title={video.title}

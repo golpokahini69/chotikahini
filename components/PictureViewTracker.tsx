@@ -17,6 +17,18 @@ export function PictureViewTracker({ galleryId }: { galleryId: string }) {
   useEffect(() => {
     if (!galleryId) return;
 
+    // Already counted in this tab (page load, RSC navigation back, refresh):
+    // send nothing at all. The server de-dupes per viewer for 24h too, but
+    // skipping the request here removes it entirely instead of spending a
+    // function invocation + a DB round-trip to be told "already counted".
+    const sessionKey = `picture_view:${galleryId}`;
+    try {
+      if (sessionStorage.getItem(sessionKey)) return;
+      sessionStorage.setItem(sessionKey, String(Date.now()));
+    } catch {
+      // sessionStorage blocked: fall through, server de-dupes regardless.
+    }
+
     // `keepalive` lets the request survive the visitor navigating away
     // immediately — which is common when they click "মূল সাইটে দেখুন".
     fetch(`/api/pictures/${galleryId}/view`, {

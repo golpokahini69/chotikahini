@@ -23,7 +23,6 @@ import { AuthorSocialIcons } from "@/components/AuthorSocialIcons";
 import { SavePostButton } from "@/components/SavePostButton";
 import { RecordHistory } from "@/components/RecordHistory";
 import { ReadingProgressTracker } from "@/components/ReadingProgressTracker";
-import { PageVisitTracker } from "@/components/PageVisitTracker";
 import { CoverLightbox } from "@/components/CoverLightbox";
 import { UserAvatar } from "@/components/UserAvatar";
 import { LikePostButton } from "@/components/LikePostButton";
@@ -95,7 +94,6 @@ export function StoryView({
     <>
       <RecordHistory slug={post.slug} title={post.title} cover={post.cover || ""} />
       <ReadingProgressTracker postSlug={post.slug} />
-      <PageVisitTracker slug={post.slug} />
       <ReadingProgress />
 
       <script

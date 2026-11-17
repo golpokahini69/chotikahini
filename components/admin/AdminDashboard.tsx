@@ -539,20 +539,53 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
     fetchWelcomeRecipients();
     fetchStorySimilarity();
 
-    // Live-refresh badges (notifications, deletion requests, messages,
-    // pending reviews, verification) every 30s so sidebar counts update
-    // without a manual refresh.
-    const interval = setInterval(() => {
+    // Badge refresh for the sidebar (notifications, deletion requests,
+    // messages, pending reviews, verification).
+    //
+    // Three deliberate changes:
+    //   • it runs ONLY while the admin is actually looking at the tab — a
+    //     background dashboard tab used to keep firing six API requests
+    //     every 30 seconds for badges nobody saw;
+    //   • `fetchStats()` is out of the loop: stats refresh after every admin
+    //     action anyway (publish/edit/delete all re-fetch), so paying for
+    //     it every 30s only mattered for the auto-publish cron at 03:00;
+    //   • coming back to a hidden tab refreshes once immediately instead of
+    //     waiting for the next tick.
+    let interval: number | undefined = window.setInterval(() => {
+      if (document.hidden) return;
       fetchAdminNotifications();
       fetchWelcomeRecipients();
       fetchDeletionRequests();
       fetchContactMessages();
       fetchAllStoriesForReview();
       fetchVerifyRequests();
-      fetchStats();
     }, 30000);
 
-    return () => clearInterval(interval);
+    const onVisibility = () => {
+      if (document.hidden) {
+        if (interval !== undefined) window.clearInterval(interval);
+        interval = undefined;
+      } else {
+        fetchAdminNotifications();
+        if (interval === undefined) {
+          interval = window.setInterval(() => {
+            if (document.hidden) return;
+            fetchAdminNotifications();
+            fetchWelcomeRecipients();
+            fetchDeletionRequests();
+            fetchContactMessages();
+            fetchAllStoriesForReview();
+            fetchVerifyRequests();
+          }, 30000);
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      if (interval !== undefined) window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [fetchAnalytics, fetchWelcomeRecipients]);
 
   const handleOpenAuthorStories = async (authorObj: any) => {
@@ -969,27 +1002,6 @@ return (
                   </div>
                 </div>
 
-                {/* 1. Live Active Online Users */}
-                <div className="bg-surface-alt p-4 rounded-2xl border border-emerald-500/30 dark:border-emerald-500/20 shadow-xs flex flex-col justify-between min-h-[105px] transition-all hover:border-emerald-500/40">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping shrink-0 inline-block" />
-                      <span className="text-xs text-fg-muted font-semibold truncate">লাইভ অনলাইন</span>
-                    </div>
-                    <span className="p-2 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-xl shrink-0">
-                      <Activity className="w-4 h-4 animate-pulse" />
-                    </span>
-                  </div>
-                  <div className="mt-2">
-                    <p className="text-2xl font-black tracking-tight text-emerald-600 dark:text-emerald-400">
-                      {enToBnNumber(stats?.activeOnlineUsers || 1)} জন
-                    </p>
-                    <p className="text-[10.5px] text-emerald-600/70 dark:text-emerald-400/70 truncate mt-0.5">
-                      রিয়েল-টাইম সক্রিয়
-                    </p>
-                  </div>
-                </div>
-
                 {/* 2. Daily Count (Today) */}
                 <div className="bg-surface-alt p-4 rounded-2xl border border-border shadow-xs flex flex-col justify-between min-h-[105px] transition-all hover:border-blue-500/30">
                   <div className="flex items-center justify-between gap-2">
@@ -1003,22 +1015,6 @@ return (
                       {enToBnNumber(stats?.dailyCount || 0)}
                     </p>
                     <p className="text-[10.5px] text-fg-subtle truncate mt-0.5">আজকের মোট হিট</p>
-                  </div>
-                </div>
-
-                {/* 3. Unique Page Visitors */}
-                <div className="bg-surface-alt p-4 rounded-2xl border border-border shadow-xs flex flex-col justify-between min-h-[105px] transition-all hover:border-indigo-500/30">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs text-fg-muted font-semibold truncate">ইউনিক ভিজিটর</span>
-                    <span className="p-2 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-xl shrink-0">
-                      <Eye className="w-4 h-4" />
-                    </span>
-                  </div>
-                  <div className="mt-2">
-                    <p className="text-2xl font-black tracking-tight text-indigo-600 dark:text-indigo-400">
-                      {enToBnNumber(stats?.uniqueVisitorsCount || 0)}
-                    </p>
-                    <p className="text-[10.5px] text-fg-subtle truncate mt-0.5">ইউনিক আইপি ট্র্যাকিং</p>
                   </div>
                 </div>
 
@@ -1077,46 +1073,8 @@ return (
                     </div>
                     <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{enToBnNumber(analytics?.active7d || 0)}</p>
                   </div>
-                  <div className="p-4 rounded-xl border border-indigo-200/60 dark:border-indigo-900/40 bg-gradient-to-br from-indigo-50/40 to-surface-alt dark:from-indigo-950/10 dark:to-surface-alt">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="w-7 h-7 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 flex items-center justify-center"><Eye className="w-4 h-4" /></span>
-                      <p className="text-xs text-fg-muted font-medium">মোট ইউনিক ভিজিটর</p>
-                    </div>
-                    <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">{enToBnNumber(analytics?.uniqueVisitors || 0)}</p>
-                  </div>
-                  <div className="p-4 rounded-xl border border-rose-200/60 dark:border-rose-900/40 bg-gradient-to-br from-rose-50/40 to-surface-alt dark:from-rose-950/10 dark:to-surface-alt">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="w-7 h-7 rounded-lg bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400 flex items-center justify-center"><TrendingUp className="w-4 h-4" /></span>
-                      <p className="text-xs text-fg-muted font-medium">মোট ভিজিট</p>
-                    </div>
-                    <p className="text-2xl font-bold text-rose-600 dark:text-rose-400">{enToBnNumber(analytics?.totalVisits || 0)}</p>
-                  </div>
                 </div>
 
-                <div>
-                  {/* Daily Stats */}
-                  <div className="space-y-3">
-                    <h4 className="text-sm font-semibold text-fg border-b border-border pb-2">ডেইলি ভিজিট (গত ১৪ দিন)</h4>
-                    {analytics && analytics.dailyStats && analytics.dailyStats.length > 0 ? (
-                      <div className="max-h-80 overflow-y-auto rounded-xl border border-border divide-y divide-zinc-200 dark:divide-zinc-800">
-                        {analytics.dailyStats.map((d: any) => (
-                          <div key={d.date} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                            <span className="text-zinc-600 dark:text-zinc-300">{d.date}</span>
-                            <div className="flex items-center gap-4">
-                              <span className="text-fg-muted"><span className="font-bold text-fg">{enToBnNumber(d.visits)}</span> ভিজিট</span>
-                              <span className="text-fg-muted"><span className="font-bold text-indigo-600 dark:text-indigo-400">{enToBnNumber(d.uniqueVisitors)}</span> ইউনিক</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-fg-muted italic p-4 text-center border border-dashed border-border rounded-xl">
-                        এখনো কোনো ভিজিট রেকর্ড নেই। ডাটাবেসে <code className="text-xs bg-surface-hover px-1.5 py-0.5 rounded">scripts/analytics-supabase.sql</code> চালান এবং গল্পের পেজ ভিজিট হলে এখানে দেখা যাবে।
-                      </p>
-                    )}
-                  </div>
-
-                </div>
               </div>
               )}
 
