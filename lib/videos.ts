@@ -123,8 +123,6 @@ const listPublishedVideosCached = cachedRead(
     revalidate: 86400,
     tags: [CACHE_TAGS.videos],
     keyParts: ([safePage, safeSize]) => [safePage, safeSize],
-    ttlMs: 600_000,
-    staleMs: 300_000,
   }
 );
 
@@ -223,8 +221,6 @@ const getPublishedVideoCached = cachedRead(
     revalidate: 86400,
     tags: [CACHE_TAGS.videos],
     keyParts: ([videoId]) => [videoId],
-    ttlMs: 600_000,
-    staleMs: 300_000,
   }
 );
 
@@ -246,8 +242,6 @@ const getPublishedVideoBySlugCached = cachedRead(
     revalidate: 86400,
     tags: [CACHE_TAGS.videos],
     keyParts: ([publicSlug]) => [publicSlug],
-    ttlMs: 600_000,
-    staleMs: 300_000,
   }
 );
 

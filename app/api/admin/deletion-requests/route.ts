@@ -3,6 +3,7 @@ import { requirePermission } from "@/lib/admin-auth";
 import { getSession } from "@/lib/auth";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { clearPostsCache } from "@/lib/posts";
+import { revalidateStoryPaths } from "@/lib/revalidate-stories";
 import { logAuditCritical } from "@/lib/audit";
 import { notifyAdmins } from "@/lib/notify";
 
@@ -117,7 +118,7 @@ export async function POST(req: Request) {
     if (targetType === "story") {
       const { data: story } = await supabase
         .from("stories")
-        .select("uid, slug")
+        .select("uid, slug, public_slug")
         .or(`uid.eq.${targetId},slug.eq.${targetId}`)
         .maybeSingle();
       if (story) {
@@ -126,6 +127,9 @@ export async function POST(req: Request) {
         const { error: metaError } = await supabase.from("post_metadata").delete().eq("slug", story.slug || story.uid);
         if (metaError) throw metaError;
         clearPostsCache();
+        // Data cache only is not enough: the cached listings and story URLs
+        // still contain the deleted story until their own revalidate window.
+        revalidateStoryPaths(story.slug || story.uid, story.uid, story.public_slug || null);
       }
     } else if (targetType === "comment") {
       const { error: commentDeleteError } = await supabase.from("comments").delete().eq("id", targetId);
@@ -194,11 +198,23 @@ export async function PATCH(req: Request) {
     // would report "approved" while the content was still live (or the
     // request row was left dangling).
     if (reqRow.target_type === "story") {
+      // Read the row BEFORE deleting it — the public slug is needed to purge
+      // the story's canonical `/golpo/<slug>` page.
+      const { data: storyRow } = await supabase
+        .from("stories")
+        .select("uid, slug, public_slug")
+        .or(`uid.eq.${reqRow.target_id},slug.eq.${reqRow.target_id}`)
+        .maybeSingle();
       const { error: deleteError } = await supabase.from("stories").delete().or(`uid.eq.${reqRow.target_id},slug.eq.${reqRow.target_id}`);
       if (deleteError) throw deleteError;
       const { error: metaError } = await supabase.from("post_metadata").delete().eq("slug", reqRow.target_id);
       if (metaError) throw metaError;
       clearPostsCache();
+      revalidateStoryPaths(
+        storyRow?.slug || reqRow.target_id,
+        storyRow?.uid || null,
+        storyRow?.public_slug || null,
+      );
     } else if (reqRow.target_type === "comment") {
       const { error: commentDeleteError } = await supabase.from("comments").delete().eq("id", reqRow.target_id);
       if (commentDeleteError) throw commentDeleteError;

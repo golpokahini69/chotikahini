@@ -9,6 +9,7 @@ import { pictureSourceKey } from "@/lib/picture-source-url";
 import { resolvePublishState, resolveSchedulePatch } from "@/lib/media-schedule";
 import { announcePicturePublished } from "@/lib/chat-system";
 import { CACHE_TAGS, invalidateTags } from "@/lib/cache";
+import { revalidatePicturePaths } from "@/lib/revalidate-media";
 
 export const dynamic = "force-dynamic";
 
@@ -344,6 +345,7 @@ export async function POST(request: Request) {
     }
 
     invalidateTags(CACHE_TAGS.pictures);
+    revalidatePicturePaths();
 
     return NextResponse.json({
       picture: data,
@@ -555,6 +557,7 @@ export async function PATCH(request: Request) {
     }
 
     invalidateTags(CACHE_TAGS.pictures);
+    revalidatePicturePaths();
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -585,6 +588,7 @@ export async function DELETE(request: Request) {
       .neq("status", "deleted");
     if (error) throw error;
     invalidateTags(CACHE_TAGS.pictures);
+    revalidatePicturePaths();
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("[admin/pictures] delete failed:", error);

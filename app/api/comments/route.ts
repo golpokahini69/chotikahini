@@ -89,8 +89,6 @@ const readComments = cachedRead(
     revalidate: 300,
     tags: [CACHE_TAGS.comments],
     keyParts: ([postSlug]) => [postSlug],
-    ttlMs: 30_000,
-    staleMs: 60_000,
   },
 );
 

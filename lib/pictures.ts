@@ -259,8 +259,6 @@ const getPublishedPicturesCached = cachedRead(
       tag || "",
       category || "",
     ],
-    ttlMs: 600_000,
-    staleMs: 300_000,
   }
 );
 
@@ -402,8 +400,6 @@ const listPictureTagsCached = cachedRead(
   {
     revalidate: 86400,
     tags: [CACHE_TAGS.pictures],
-    ttlMs: 600_000,
-    staleMs: 300_000,
   }
 );
 
@@ -460,8 +456,6 @@ const listPictureCategoriesCached = cachedRead(
   {
     revalidate: 86400,
     tags: [CACHE_TAGS.pictures],
-    ttlMs: 600_000,
-    staleMs: 300_000,
   }
 );
 
@@ -520,8 +514,6 @@ const getPublishedPictureCached = cachedRead(
     revalidate: 86400,
     tags: [CACHE_TAGS.pictures],
     keyParts: ([galleryId]) => [galleryId],
-    ttlMs: 600_000,
-    staleMs: 300_000,
   }
 );
 
@@ -543,8 +535,6 @@ const getPublishedPictureBySlugCached = cachedRead(
     revalidate: 86400,
     tags: [CACHE_TAGS.pictures],
     keyParts: ([publicSlug]) => [publicSlug],
-    ttlMs: 600_000,
-    staleMs: 300_000,
   }
 );
 

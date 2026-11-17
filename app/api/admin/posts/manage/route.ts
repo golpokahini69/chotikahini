@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { revalidatePath } from "next/cache";
 import readingTime from "reading-time";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { getSession } from "@/lib/auth";
@@ -11,44 +10,10 @@ import { logAudit, logAuditCritical } from "@/lib/audit";
 import { notifyAdmins, notifyUser } from "@/lib/notify";
 import { assignPublicSlug } from "@/lib/public-slug-assign";
 import { announceStoryPublished } from "@/lib/chat-system";
-
-// Invalidates cached ISR pages immediately after a story lifecycle change.
-function revalidateStoryPaths(
-  slug?: string | null,
-  uid?: string | null,
-  publicSlug?: string | null,
-) {
-  revalidateStoryListingPaths();
-  if (slug) revalidatePath(`/${slug}`);
-  if (uid && uid !== slug) revalidatePath(`/${uid}`);
-  // The new public route. Without this a published story's `/golpo/<slug>`
-  // page would keep serving the "not found" state until the route's own
-  // revalidate window elapsed.
-  if (publicSlug) revalidatePath(`/golpo/${publicSlug}`);
-  // The feeds and the sitemap are derived from the same stories. Without
-  // this a newly published story only appeared in the feed after the route's
-  // own revalidate window (an hour), so readers saw the new story late.
-  revalidatePath("/rss.xml");
-  revalidatePath("/rss-pictures.xml");
-  revalidatePath("/sitemap.xml");
-}
-
-/** Invalidate every public listing whose contents depend on published stories. */
-function revalidateStoryListingPaths() {
-  revalidatePath("/", "page");
-  revalidatePath("/page/[num]", "page");
-  revalidatePath("/posts", "page");
-  revalidatePath("/categories", "page");
-  revalidatePath("/categories/[category]", "page");
-  revalidatePath("/tags", "page");
-  revalidatePath("/tags/[tag]", "page");
-  revalidatePath("/archive", "page");
-  revalidatePath("/archive/[year]/[month]", "page");
-  revalidatePath("/authors", "page");
-  revalidatePath("/authors/[id]", "page");
-  revalidatePath("/series", "page");
-  revalidatePath("/featured", "page");
-}
+import {
+  revalidateStoryPaths,
+  revalidateStoryListingPaths,
+} from "@/lib/revalidate-stories";
 
 // Helper to send a notification to a single user.
 //
@@ -375,6 +340,9 @@ export async function POST(req: Request) {
 
       await sendNotif(dbStory.author_id, "story_revision_requested", dbStory.slug, `আপনার গল্প "${dbStory.title}" এ সংশোধন প্রস্তাব করা হয়েছে: ${feedbackText}`);
       logAudit(session, { action: "story.request_revision", targetType: "story", targetId: dbStory.uid, newState: { feedback: feedbackText } });
+      // A published story sent back for revision disappears from every
+      // listing — the listings must be purged, not just the data cache.
+      revalidateStoryPaths(dbStory.slug, dbStory.uid, dbStory.public_slug);
       clearPostsCache();
 
       return NextResponse.json({ success: true, message: "লেখককে সংশোধন প্রস্তাব পাঠানো হয়েছে।" });
@@ -396,6 +364,7 @@ export async function POST(req: Request) {
 
       await sendNotif(dbStory.author_id, "story_rejected", dbStory.slug, `আপনার গল্প "${dbStory.title}" প্রত্যাখ্যান করা হয়েছে। কারণ: ${rejectionText}`);
       logAudit(session, { action: "story.reject", targetType: "story", targetId: dbStory.uid, newState: { reason: rejectionText } });
+      revalidateStoryPaths(dbStory.slug, dbStory.uid, dbStory.public_slug);
       clearPostsCache();
 
       return NextResponse.json({ success: true, message: "গল্পটি প্রত্যাখ্যান করা হয়েছে।" });
@@ -414,7 +383,7 @@ export async function POST(req: Request) {
       if (unpublishError) throw unpublishError;
 
       await sendNotif(dbStory.author_id, "story_unpublished", dbStory.slug, `আপনার গল্প "${dbStory.title}" ড্রাফটে স্থানান্তর করা হয়েছে।`);
-      revalidateStoryPaths(dbStory.slug, dbStory.uid);
+      revalidateStoryPaths(dbStory.slug, dbStory.uid, dbStory.public_slug);
       logAudit(session, { action: "story.unpublish", targetType: "story", targetId: dbStory.uid });
       clearPostsCache();
 
@@ -432,7 +401,7 @@ if (action === "delete") {
         if (storyDeleteError) throw storyDeleteError;
         const { error: metaDeleteError } = await supabase.from("post_metadata").delete().eq("slug", dbStory.slug);
         if (metaDeleteError) throw metaDeleteError;
-        revalidateStoryPaths(dbStory.slug, dbStory.uid);
+        revalidateStoryPaths(dbStory.slug, dbStory.uid, dbStory.public_slug);
         clearPostsCache();
         return NextResponse.json({ success: true, message: "গল্পটি সফলভাবে স্থায়ীভাবে মুছে ফেলা হয়েছে।" });
       } else if (canHideContent(role)) {
@@ -457,7 +426,7 @@ if (action === "delete") {
           },
           supabase
         );
-        revalidateStoryPaths(dbStory.slug, dbStory.uid);
+        revalidateStoryPaths(dbStory.slug, dbStory.uid, dbStory.public_slug);
         clearPostsCache();
         return NextResponse.json({ success: true, message: "গল্পটি লুকানো হয়েছে। স্থায়ী ডিলিটের জন্য সুপার অ্যাডমিনের অনুমোদন প্রয়োজন।" });
       } else {

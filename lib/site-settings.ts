@@ -31,13 +31,13 @@ const readSiteSettings = cachedRead(
       categories: (categories || []) as any[],
     };
   },
-  { revalidate: 86400, tags: [CACHE_TAGS.siteSettings, CACHE_TAGS.categories], ttlMs: 600_000, staleMs: 300_000 }
+  { revalidate: 86400, tags: [CACHE_TAGS.siteSettings, CACHE_TAGS.categories] }
 );
 
 /**
  * Refresh the in-process site config from the (cached) DB rows.
- * Cheap on every call after the first — the underlying query is cached in L1
- * and L2, so this never hits the DB on a warm cache.
+ * Cheap on every call after the first — the underlying query is served by the
+ * shared Data Cache, so this never hits the DB on a warm cache.
  */
 export async function loadSiteSettings(): Promise<void> {
   applySiteSettings(await readSiteSettings());

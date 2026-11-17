@@ -178,8 +178,8 @@ function mapStoryToPost(s: StoryRow, userMap: UserInfoMap, includeContent = fals
 export { normalizeRef } from "./utils";
 
 /**
- * Raw users list — shared across requests/instances (L1 memory + L2 Data
- * Cache). Throwing on error (instead of returning []) is deliberate: a failed
+ * Raw users list — shared across requests/instances through the L2 Data
+ * Cache. Throwing on error (instead of returning []) is deliberate: a failed
  * query must NEVER be cached, otherwise a transient DB hiccup would serve
  * "no posts" for the entire TTL.
  */
@@ -193,7 +193,7 @@ const getRawUsers = cachedRead(
     if (error) throw error;
     return Array.isArray(data) ? data : [];
   },
-  { revalidate: 86400, tags: [CACHE_TAGS.users, CACHE_TAGS.posts], ttlMs: 600_000, staleMs: 300_000 }
+  { revalidate: 86400, tags: [CACHE_TAGS.users, CACHE_TAGS.posts] }
 );
 
 /**
@@ -231,8 +231,6 @@ const getRawStories = cachedRead(
     revalidate: 86400,
     tags: [CACHE_TAGS.posts],
     keyParts: ([includePending]) => [includePending ? "all" : "published"],
-    ttlMs: 600_000,
-    staleMs: 300_000,
   }
 );
 
@@ -281,8 +279,6 @@ const getPublishedStoryAuthorCounts = cachedRead(
   {
     revalidate: 86400,
     tags: [CACHE_TAGS.posts],
-    ttlMs: 600_000,
-    staleMs: 300_000,
   }
 );
 
@@ -334,7 +330,10 @@ const getViewCountsBySlug = cachedRead(
  *
  * Cache tiers (system design):
  *   request  → React cache()        dedupe within one render pass
- *   process  → L1 memory            instant, per serverless instance
+ *   process  → L1 single-flight     de-dupes concurrent callers only; it
+ *                                   never SERVES a stored value, because a
+ *                                   per-instance window would let another
+ *                                   instance render a page from pre-write rows
  *   platform → L2 Next Data Cache   survives cold starts, shared by all
  *   edge     → CDN Cache-Control    set on the JSON endpoints
  */
@@ -364,10 +363,10 @@ const fetchStoriesFromDb = cache(async (includePending: boolean) => {
   // Fallback: fill in any author ids that the bulk users query missed.
   await ensureAuthorsInMap(userMap, dbStories);
 
-  // `usersRef` / `dbStories` are the *raw* arrays straight from the L1 cache.
-  // Their identity only changes when the underlying cache entry refreshes, so
-  // the computed-posts memo below can reuse its result across requests without
-  // re-mapping, re-sorting and re-linking every story on every render.
+  // `usersRef` / `dbStories` are the *raw* arrays straight from the shared
+  // read cache. The computed-posts memo below keys off their identity, so
+  // every caller that shares one read reuses a single computed array instead
+  // of re-mapping, re-sorting and re-linking every story per call site.
   return { userMap, dbStories, usersRef: users };
 });
 
@@ -664,7 +663,7 @@ const getStoryContent = cachedRead(
     if (slugError) throw slugError;
     return (bySlug?.content as string) || "";
   },
-  { revalidate: 86400, tags: [CACHE_TAGS.posts], keyParts: ([q]) => [q], ttlMs: 600_000, staleMs: 300_000 }
+  { revalidate: 86400, tags: [CACHE_TAGS.posts], keyParts: ([q]) => [q] }
 );
 
 export async function getPostContentByIdentifierAsync(identifier: string): Promise<string> {
@@ -749,8 +748,6 @@ const getStoryContentsBulk = cachedRead(
     keyParts: ([identifiers]) => [
       identifiers.map((i) => i.toLowerCase()).sort().join(","),
     ],
-    ttlMs: 600_000,
-    staleMs: 300_000,
   }
 );
 
@@ -1357,8 +1354,6 @@ const searchPostsCached = cachedRead(
     revalidate: 86400,
     tags: [CACHE_TAGS.posts],
     keyParts: ([query]) => [normalizeSearchText(query)],
-    ttlMs: 600_000,
-    staleMs: 300_000,
   },
 );
 

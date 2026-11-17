@@ -3,17 +3,19 @@
 //
 // Goal (system design): stop every page load from hitting Supabase.
 //
-//   L1  in-process micro-cache   plain Map, ~0 latency, per server instance
-//   L2  Next.js Data Cache       `unstable_cache`, shared across requests,
-//                                serverless instances and cold starts
-//   L3  HTTP / CDN cache         `Cache-Control: s-maxage` headers on the
-//                                JSON endpoints that expose this data
+//   L1  in-process single-flight   plain Map; de-dupes concurrent callers of
+//                                  the same key, never serves a stored value
+//   L2  Next.js Data Cache         `unstable_cache`, shared across requests,
+//                                  serverless instances and cold starts
+//   L3  HTTP / CDN cache           `Cache-Control: s-maxage` headers on the
+//                                  JSON endpoints that expose this data
 //
 // Properties
-//   • Bounded freshness: L1 values are not served past their freshness window;
-//     Next's tagged Data Cache avoids repeat database reads across requests.
 //   • Single-flight: N concurrent misses trigger exactly ONE query.
-//   • Tag-based invalidation: writes call `invalidateTags([...])` to purge
+//   • No per-instance serving window: L1 never returns a value older than the
+//     call that produced it (see DEFAULT_FRESH_MS below), so an instance can
+//     never render a page from rows that predate a write made elsewhere.
+//   • Tag-based invalidation: writes call `invalidateTags([...])` to expire
 //     shared Data Cache entries immediately on every instance.
 //   • Failures are never cached (a thrown query leaves the cache untouched).
 //
@@ -44,12 +46,26 @@ const inflight = new Map<string, Promise<unknown>>();
 const namespaceVersions = new Map<string, number>();
 const namespaceTags = new Map<string, Set<string>>();
 
-// Aggressive caching: Data Cache stays fresh for 24h by default,
+// Aggressive L2 caching: the Data Cache stays fresh for 24h by default,
 // because all mutation paths call `invalidateTags()` immediately on write.
 // This prevents Supabase egress from draining on repeat page visits.
 const DEFAULT_REVALIDATE_S = 86400; // 24 hours
-const DEFAULT_FRESH_MS = 10 * 60 * 1000; // 10 minutes L1 in-process
-const DEFAULT_STALE_MS = 5 * 60 * 1000; // 5 minutes SWR window
+
+// L1 serving windows are ZERO on purpose.
+//
+// `invalidateTags()` can only clear the in-process L1 map of the instance that
+// ran the write. Any positive window would let OTHER instances keep serving
+// pre-write rows for up to `ttlMs + staleMs` — and the ISR render they perform
+// with those rows is then cached for the route's whole `revalidate` window
+// (the homepage alone caches for an hour). That is exactly how a published
+// story failed to show up on the homepage until the next time-based
+// revalidation.
+//
+// Cross-instance freshness now comes from the shared L2 Data Cache, which
+// `revalidateTag()` expires globally. L1 survives only as the single-flight
+// layer that de-duplicates concurrent callers of the same key.
+const DEFAULT_FRESH_MS = 0;
+const DEFAULT_STALE_MS = 0;
 
 export interface CachedReadOptions<TArgs extends unknown[]> {
   /** How long Next.js keeps the value in its persistent Data Cache (seconds). */
@@ -58,9 +74,14 @@ export interface CachedReadOptions<TArgs extends unknown[]> {
   tags?: string[];
   /** Serializable key suffix derived from the call arguments. */
   keyParts?: (args: TArgs) => (string | number | boolean)[];
-  /** L1 freshness window (ms). After this the value is stale but still usable. */
+  /**
+   * L1 in-process serving window (ms). Defaults to 0 — L1 then only
+   * de-duplicates concurrent callers and never serves a stored value.
+   * Only set this for data whose staleness cannot poison an ISR render
+   * (display-only counters, for example).
+   */
   ttlMs?: number;
-  /** Extra window (ms) in which stale values are served while refreshing. */
+  /** Extra window (ms) in which stale L1 values are served while refreshing. */
   staleMs?: number;
 }
 
@@ -155,10 +176,17 @@ export function invalidateTags(tags: CacheTag | CacheTag[] | string | string[]):
     if (list.some((tag) => namespaceTagSet.has(tag))) invalidatedNamespaces.add(namespace);
   }
   for (const namespace of invalidatedNamespaces) clearMemoryCache(namespace);
-  // Next.js 16 requires an explicit cache profile as the second argument to
-  // `revalidateTag`. "max" is the stale-while-revalidate behaviour the previous
-  // single-argument call had.
-  for (const tag of list) revalidateTag(tag, "max");
+  // Next 16 requires a cache profile as `revalidateTag`'s second argument.
+  // `{ expire: 0 }` expires the tags NOW — the documented route-handler
+  // equivalent of Server-Action `updateTag` — so the next read anywhere is a
+  // hard miss that goes back to the database.
+  //
+  // The built-in `"max"` profile is stale-while-revalidate: the FIRST read
+  // after a write still returns the PRE-write value while refreshing in the
+  // background. The render triggered by `revalidatePath()` right after a
+  // publish would then bake pre-write rows into a page that Next caches for
+  // another full `revalidate` window — the homepage for an hour.
+  for (const tag of list) revalidateTag(tag, { expire: 0 });
 }
 
 /** Standard CDN cache headers for endpoints where brief response staleness is acceptable. */

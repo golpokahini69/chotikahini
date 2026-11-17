@@ -12,6 +12,7 @@ import { announceVideoPublished } from "@/lib/chat-system";
 import { resolvePublishState, resolveSchedulePatch } from "@/lib/media-schedule";
 import { videoSourceKey } from "@/lib/video-source-url";
 import { CACHE_TAGS, invalidateTags } from "@/lib/cache";
+import { revalidateVideoPaths } from "@/lib/revalidate-media";
 
 /**
  * Last line of defence before an `embed_url` is written to the database.
@@ -377,6 +378,7 @@ export async function POST(request: Request) {
     }
 
     invalidateTags(CACHE_TAGS.videos);
+    revalidateVideoPaths();
 
     return NextResponse.json({
       video: data,
@@ -603,6 +605,7 @@ export async function PATCH(request: Request) {
     }
 
     invalidateTags(CACHE_TAGS.videos);
+    revalidateVideoPaths();
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -628,6 +631,7 @@ export async function DELETE(request: Request) {
       .neq("status", "deleted");
     if (error) throw error;
     invalidateTags(CACHE_TAGS.videos);
+    revalidateVideoPaths();
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("[admin/videos] delete failed:", error);

@@ -39,6 +39,14 @@ import { UserAvatar } from "@/components/UserAvatar";
 export interface AdminSidebarBadges {
   pendingReviews?: number;
   unreadNotifications?: number;
+  /**
+   * Total notifications in this admin's scope (read + unread). The
+   * notifications nav item falls back to it whenever nothing is unread —
+   * without this the badge vanished the moment everything was read, so the
+   * admin could only learn that notifications existed by opening the
+   * section (the reported problem).
+   */
+  totalNotifications?: number;
   unreadMessages?: number;
   pendingVerifications?: number;
   pendingApplications?: number;
@@ -53,6 +61,8 @@ interface NavItem {
   permission: Permission;
   badge?: keyof AdminSidebarBadges;
   badgeColor?: string;
+  /** Optional total-count key: shown when `badge` (unread) is 0. */
+  badgeTotal?: keyof AdminSidebarBadges;
 }
 
 interface NavGroup {
@@ -241,6 +251,7 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/admin?section=notifications",
         permission: "notifications.view",
         badge: "unreadNotifications",
+        badgeTotal: "totalNotifications",
         badgeColor: "bg-rose-600 text-white animate-pulse",
       },
       {
@@ -444,7 +455,21 @@ export function AdminSidebar({
                 {visibleItems.map((item) => {
                   const active = isItemActive(item);
                   const badgeValue = item.badge && badges[item.badge];
-                  const hasBadge = typeof badgeValue === "number" && badgeValue > 0;
+                  const badgeTotal = item.badgeTotal && badges[item.badgeTotal];
+                  const unreadNum = typeof badgeValue === "number" ? badgeValue : 0;
+                  const totalNum = typeof badgeTotal === "number" ? badgeTotal : unreadNum;
+                  // Unread first; when everything has been read, show the
+                  // TOTAL so the count never silently disappears.
+                  const badgeDisplay = unreadNum > 0 ? badgeValue : badgeTotal ?? badgeValue;
+                  const hasUnread = unreadNum > 0;
+                  const hasBadge = typeof badgeDisplay === "number" && badgeDisplay > 0;
+                  const badgeTitle = !hasBadge
+                    ? undefined
+                    : hasUnread
+                      ? totalNum !== unreadNum
+                        ? `${enToBnNumber(unreadNum)}টি অপঠিত · ${enToBnNumber(totalNum)}টি মোট`
+                        : `${enToBnNumber(unreadNum)}টি অপঠিত`
+                      : `${enToBnNumber(totalNum)}টি নোটিফিকেশন — সবগুলো পড়া হয়েছে`;
                   const targetHref = item.href || (item.section ? `/admin?section=${item.section}` : "/admin");
 
                   return (
@@ -469,11 +494,16 @@ export function AdminSidebar({
 
                       {hasBadge && (
                         <span
+                          title={badgeTitle}
                           className={`shrink-0 px-1.5 py-0.5 text-[10px] font-bold rounded-full transition-all ${
-                            active ? "bg-white text-blue-700" : (item.badgeColor || "bg-blue-600 text-white")
+                            active
+                              ? "bg-white text-blue-700"
+                              : hasUnread
+                                ? item.badgeColor || "bg-blue-600 text-white"
+                                : (item.badgeColor || "bg-blue-600 text-white").replace(" animate-pulse", "")
                           }`}
                         >
-                          {enToBnNumber(badgeValue)}
+                          {enToBnNumber(badgeDisplay as number)}
                         </span>
                       )}
                     </Link>
@@ -554,15 +584,27 @@ export function AdminSidebar({
           >
             <ExternalLink className="w-4 h-4 text-fg-muted" />
           </Link>
-          {badges.unreadNotifications && badges.unreadNotifications > 0 ? (
-            <Link
-              href="/admin?section=notifications"
-              className="relative p-2 rounded-xl bg-surface border border-border text-fg"
-            >
-              <Bell className="w-4 h-4 text-rose-500" />
-              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full animate-ping" />
-            </Link>
-          ) : null}
+          {(() => {
+            const unread = badges.unreadNotifications || 0;
+            const total = badges.totalNotifications || 0;
+            if (unread <= 0 && total <= 0) return null;
+            return (
+              <Link
+                href="/admin?section=notifications"
+                title={unread > 0 ? `${enToBnNumber(unread)}টি অপঠিত` : `${enToBnNumber(total)}টি নোটিফিকেশন — সবগুলো পড়া হয়েছে`}
+                className="relative p-2 rounded-xl bg-surface border border-border text-fg"
+              >
+                <Bell className="w-4 h-4 text-rose-500" />
+                {unread > 0 ? (
+                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full animate-ping" />
+                ) : (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 bg-rose-600/80 text-white text-[9px] font-bold rounded-full flex items-center justify-center leading-none">
+                    {enToBnNumber(total)}
+                  </span>
+                )}
+              </Link>
+            );
+          })()}
           <UserAvatar
             src={user?.profilePic}
             name={user?.name || user?.username}

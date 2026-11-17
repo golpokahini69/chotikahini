@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { getSupabaseAdmin } from "@/lib/supabase";
@@ -18,13 +19,17 @@ const getCategoryRecords = cachedRead(
     if (error) throw error;
     return data || [];
   },
-  { revalidate: 86400, tags: [CACHE_TAGS.categories], ttlMs: 600_000, staleMs: 300_000 },
+  { revalidate: 86400, tags: [CACHE_TAGS.categories] },
 );
 
 async function refreshCategoryCache() {
   clearPostsCache();
   clearMemoryCache("site-settings");
   invalidateTags([CACHE_TAGS.categories, CACHE_TAGS.siteSettings]);
+  // Category names/counts are rendered into every cached listing, card and
+  // story page. `_N_T_/layout` matches all of them at once; data tags alone
+  // never reach page entries.
+  revalidatePath("/", "layout");
   await loadSiteSettings();
 }
 

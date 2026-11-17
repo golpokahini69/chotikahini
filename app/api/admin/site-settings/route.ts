@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { getSupabaseAdmin } from "@/lib/supabase";
@@ -89,6 +90,10 @@ export async function PATCH(req: Request) {
       if (error) throw error;
     }
     invalidateTags([CACHE_TAGS.siteSettings, CACHE_TAGS.categories]);
+    // Global config is baked into every rendered page (title, banner,
+    // navigation). `_N_T_/layout` is an implicit tag of every route, so this
+    // purges the whole ISR cache — data tags alone never reach page entries.
+    revalidatePath("/", "layout");
     await loadSiteSettings();
     return NextResponse.json({ success: true });
   } catch (e: any) {

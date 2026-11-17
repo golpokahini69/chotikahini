@@ -47,11 +47,21 @@ export async function GET() {
       .from("notifications")
       .select("*")
       .or(`user_id.in.(${[...adminIds, session.id].join(",")})`)
-      .in("type", allowedTypes)
       .order("created_at", { ascending: false })
       .limit(100);
 
     if (error) throw error;
+
+    // The role-domain filter now runs HERE, in JS, on the same bounded set
+    // (limit 100), instead of inside the SQL. Same rows delivered — but the
+    // response can now report HOW MANY were withheld by the role allowlist,
+    // so "notifications exist but the panel shows fewer" is visible instead
+    // of silent. (Previously `.in("type", …)` made the API return a shorter
+    // list with no hint that anything was filtered.)
+    const allowed = new Set(allowedTypes);
+    const scopedRows = notifications || [];
+    const inDomain = scopedRows.filter((n) => allowed.has(n.type));
+    const hiddenCount = scopedRows.length - inDomain.length;
 
     // Resolve the user each notification is ABOUT. For user-targeted types
     // (new_user_registration, forgot_password_request, password_reset_*)
@@ -59,7 +69,7 @@ export async function GET() {
     // render actionable buttons (e.g. "রিসেট লিঙ্ক তৈরি" needs the id).
     const targetUserIds = Array.from(
       new Set(
-        (notifications || [])
+        inDomain
           .filter((notification) => isUserTargetedType(notification.type) && notification.actor_id)
           .map((notification) => notification.actor_id as string),
       ),
@@ -86,7 +96,7 @@ export async function GET() {
 
     const site = getSiteConfig();
     const siteName = site.seo?.siteName || site.title || "আমাদের প্ল্যাটফর্ম";
-    const mapped = (notifications || []).map((n) => {
+    const mapped = inDomain.map((n) => {
       let payload: any = {};
       try {
         if (n.snippet && n.snippet.startsWith("{")) {
@@ -140,7 +150,14 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({ notifications: mapped });
+    return NextResponse.json({
+      notifications: mapped,
+      // Rows addressed to this admin but outside their role's domain (e.g.
+      // author-scoped story events sent to an admin who is also an author).
+      // Surfaced so the panel can say they exist rather than hiding them.
+      hiddenCount,
+      totalAddressed: scopedRows.length,
+    });
   } catch (error) {
     console.error("Failed to fetch admin notifications:", error);
     return NextResponse.json({ notifications: [] }, { status: 500 });

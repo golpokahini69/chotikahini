@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { revalidatePath } from "next/cache";
 import readingTime from "reading-time";
 import { getSession } from "@/lib/auth";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { getDhakaTimeISO } from "@/lib/story-formatter";
 import { clearPostsCache } from "@/lib/posts";
+import { revalidateStoryPaths } from "@/lib/revalidate-stories";
 import { getUnusedCover, normalizeCoverUrl } from "@/lib/cover";
 import { announceStoryPublished } from "@/lib/chat-system";
 import { checkStorySimilarity } from "@/lib/similarity";
@@ -351,17 +351,13 @@ export async function POST(req: Request) {
     clearPostsCache();
 
     // Immediately refresh cached ISR pages so admin-published stories go live at once.
-    // Revalidate by BOTH uid and slug (they can differ for imported/legacy posts),
-    // plus the whole story-route pattern so a changed author name never stays
-    // stale on the detail page while the homepage card already shows the new name.
+    // Revalidate every listing (the homepage above all), the concrete story
+    // URLs by uid/slug, the canonical /golpo/<publicSlug> route and the feeds.
+    // The path/tag strings matter: Next 16 derives a route's cache tags from
+    // its app path INCLUDING route groups (`/(bn)/…`), so URL + "page" forms
+    // like `/[slug]` + "page" matched nothing — see lib/revalidate-stories.ts.
     if (isAdmin) {
-      try { revalidatePath("/"); } catch {}
-      try { revalidatePath(`/${uniqueUid}`); } catch {}
-      if (uniqueSlug !== uniqueUid) { try { revalidatePath(`/${uniqueSlug}`); } catch {} }
-      try { revalidatePath("/[slug]", "page"); } catch {}
-      try { revalidatePath("/(main)/[slug]/page", "page"); } catch {}
-      // The new public route.
-      if (publicSlug) { try { revalidatePath(`/golpo/${publicSlug}`); } catch {} }
+      try { revalidateStoryPaths(uniqueSlug, uniqueUid, publicSlug || null); } catch {}
     }
 
     // Announce in the Global Community Chat when an admin publishes the

@@ -81,7 +81,5 @@ export const getTrendingPosts = cachedRead(
   {
     revalidate: 3600,
     tags: [CACHE_TAGS.posts],
-    ttlMs: 600_000,
-    staleMs: 300_000,
   },
 );

@@ -89,12 +89,20 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
   const [selectedContactMessage, setSelectedContactMessage] = useState<any | null>(null);
 
   const [adminNotifications, setAdminNotifications] = useState<any[]>([]);
+  // Scope meta from the API: rows addressed to this admin that the role
+  // allowlist filtered out — shown instead of silently disappearing.
+  const [notifMeta, setNotifMeta] = useState<{ hiddenCount: number } | null>(null);
   const [loadingAdminNotifications, setLoadingAdminNotifications] = useState(false);
   const [welcomeRecipients, setWelcomeRecipients] = useState<WelcomeRecipient[]>([]);
   const [loadingWelcomeRecipients, setLoadingWelcomeRecipients] = useState(false);
   const [welcomeRecipientsError, setWelcomeRecipientsError] = useState("");
   const [showSentWelcomeEmails, setShowSentWelcomeEmails] = useState(false);
   const [savingWelcomeStatus, setSavingWelcomeStatus] = useState<string | null>(null);
+
+  // A failed FIRST fetch used to be swallowed (no status logged, no retry):
+  // the badge stayed at 0 until the next30s poll, which read exactly like
+  // "the notification didn't come". Now: log it, retry ONCE after 3s.
+  const notifRetryRef = { fired: false };
 
   const fetchAdminNotifications = async () => {
     setLoadingAdminNotifications(true);
@@ -103,9 +111,26 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
       if (res.ok) {
         const json = await res.json();
         setAdminNotifications(json.notifications || []);
+        setNotifMeta({ hiddenCount: json.hiddenCount || 0 });
+        notifRetryRef.fired = false;
+      } else {
+        const body = await res.text().catch(() => "");
+        console.error(`admin notifications fetch failed: ${res.status}`, body.slice(0, 200));
+        if (!notifRetryRef.fired) {
+          notifRetryRef.fired = true;
+          setTimeout(() => {
+            void fetchAdminNotifications();
+          }, 3000);
+        }
       }
     } catch (e) {
       console.error("Failed to fetch admin notifications", e);
+      if (!notifRetryRef.fired) {
+        notifRetryRef.fired = true;
+        setTimeout(() => {
+          void fetchAdminNotifications();
+        }, 3000);
+      }
     } finally {
       setLoadingAdminNotifications(false);
     }
@@ -885,6 +910,10 @@ return (
         badges={{
           pendingReviews: allStoriesQueue.filter((p) => p.status === "pending").length,
           unreadNotifications: adminNotifications.filter((n) => !n.isRead).length,
+          // Total in this admin's scope: the sidebar falls back to it when
+          // nothing is unread, so "how many are there?" is always answerable
+          // WITHOUT opening the section (the reported problem).
+          totalNotifications: adminNotifications.length,
           unreadMessages: contactMessages.filter((m) => !m.isRead).length,
           pendingVerifications: verifyRequests.filter((r: any) => r.status === "pending").length,
           pendingApplications: 0,
@@ -916,6 +945,19 @@ return (
                 {activeSection === "deletions" && "অ্যাডমিনদের পাঠানো স্থায়ী ডিলিট রিকোয়েস্ট অনুমোদন করুন।"}
                 {activeSection === "similarity" && "বিদ্যমান গল্পগুলোর মধ্যে মিল বা কপি হওয়া কন্টেন্ট স্বয়ংক্রিয়ভাবে শনাক্ত করুন।"}
                 {activeSection === "messages" && "কন্টাক্ট ফর্ম থেকে পাঠানো সমস্ত বার্তা পর্যালোচনা ও উত্তর প্রদান করুন।"}
+                {activeSection === "notifications" && adminNotifications.length > 0 && (
+                  <span className="block mt-1 font-semibold text-fg">
+                    {enToBnNumber(adminNotifications.length)}টি নোটিফিকেশন
+                    {" · "}
+                    {(() => {
+                      const unread = adminNotifications.filter((n) => !n.isRead).length;
+                      return unread > 0 ? `${enToBnNumber(unread)}টি অপঠিত` : "সব পড়া হয়েছে";
+                    })()}
+                    {notifMeta && notifMeta.hiddenCount > 0
+                      ? ` · ${enToBnNumber(notifMeta.hiddenCount)}টি লেখক-সংক্রান্ত (পাবলিক সাইটের বেলে)`
+                      : ""}
+                  </span>
+                )}
               </p>
             </div>
             <div className="flex items-center gap-2.5 w-full sm:w-auto shrink-0">

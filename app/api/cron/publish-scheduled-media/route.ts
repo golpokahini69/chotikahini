@@ -9,6 +9,11 @@ import { getSession } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { clearPostsCache } from "@/lib/posts";
 import { CACHE_TAGS, invalidateTags } from "@/lib/cache";
+import {
+  revalidateStoryPaths,
+  revalidateStoryListingPaths,
+} from "@/lib/revalidate-stories";
+import { revalidateVideoPaths, revalidatePicturePaths } from "@/lib/revalidate-media";
 
 export const dynamic = "force-dynamic";
 
@@ -141,13 +146,14 @@ async function publishDueRows(
 async function publishDueStories(): Promise<{
   published: number;
   titles: { id: string; title: string }[];
+  refs: { uid: string; slug: string | null; publicSlug: string | null }[];
 }> {
   const supabase = getSupabaseAdmin();
   const nowIso = new Date().toISOString();
 
   const { data, error } = await supabase
     .from("stories")
-    .select("uid, title, scheduled_at, published_at, history")
+    .select("uid, slug, public_slug, title, scheduled_at, published_at, history")
     .eq("status", "published")
     .not("scheduled_at", "is", null)
     .lte("scheduled_at", nowIso)
@@ -157,13 +163,14 @@ async function publishDueStories(): Promise<{
     // A missing `scheduled_at` column (migration not run yet) is a
     // configuration state, not a crash — log it and move on.
     console.warn(`[cron/publish-scheduled-media] stories query failed:`, error.message);
-    return { published: 0, titles: [] };
+    return { published: 0, titles: [], refs: [] };
   }
 
-  const rows = (data as unknown as (DueRow & { uid: string; history?: any })[]) || [];
-  if (rows.length === 0) return { published: 0, titles: [] };
+  const rows = (data as unknown as (DueRow & { uid: string; slug?: string | null; public_slug?: string | null; history?: any })[]) || [];
+  if (rows.length === 0) return { published: 0, titles: [], refs: [] };
 
   const titles: { id: string; title: string }[] = [];
+  const refs: { uid: string; slug: string | null; publicSlug: string | null }[] = [];
   let published = 0;
 
   for (const row of rows) {
@@ -191,9 +198,10 @@ async function publishDueStories(): Promise<{
 
     published++;
     titles.push({ id: row.uid, title: row.title });
+    refs.push({ uid: row.uid, slug: row.slug ?? null, publicSlug: row.public_slug ?? null });
   }
 
-  return { published, titles };
+  return { published, titles, refs };
 }
 
 export async function GET(request: Request) {
@@ -219,9 +227,27 @@ export async function GET(request: Request) {
       await announceStoryPublished(story.id, story.title);
     }
 
-    if (videos.published > 0) invalidateTags(CACHE_TAGS.videos);
-    if (pictures.published > 0) invalidateTags(CACHE_TAGS.pictures);
-    if (stories.published > 0) clearPostsCache();
+    // Data tags alone cannot purge rendered pages (page entries only carry
+    // implicit path tags after a runtime re-render) — purge the routes too,
+    // or a scheduled story stays off the homepage until its next ISR window.
+    if (videos.published > 0) {
+      invalidateTags(CACHE_TAGS.videos);
+      revalidateVideoPaths();
+    }
+    if (pictures.published > 0) {
+      invalidateTags(CACHE_TAGS.pictures);
+      revalidatePicturePaths();
+    }
+    if (stories.published > 0) {
+      clearPostsCache();
+      if (stories.refs.length > 0) {
+        for (const ref of stories.refs) {
+          revalidateStoryPaths(ref.slug || ref.uid, ref.uid, ref.publicSlug);
+        }
+      } else {
+        revalidateStoryListingPaths();
+      }
+    }
 
     return NextResponse.json({
       success: true,

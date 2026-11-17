@@ -55,7 +55,5 @@ export const getAnnouncement = cachedRead(
   {
     revalidate: 300,
     tags: [CACHE_TAGS.announcement],
-    ttlMs: 60_000,
-    staleMs: 120_000,
   },
 );
