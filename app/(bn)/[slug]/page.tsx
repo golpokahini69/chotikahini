@@ -20,8 +20,30 @@ import { getPartIndexes } from "@/lib/series-utils";
 export const revalidate = 86400;
 export const dynamicParams = true;
 
-export async function generateStaticParams() {
-  return getStoryParams();
+/**
+ * Render story pages ON DEMAND, not at build time.
+ *
+ * ── Why (Vercel ISR-write budget) ──────────────────────────────────────
+ * A page prerendered at build time carries the data tags collected during
+ * that render — every story page picked up `posts` from the shared story
+ * list. `invalidateTags(posts)` on each publish therefore expired ALL
+ * ~300 prerendered story pages at once, and every later visit to one of
+ * them paid a fresh render + ISR WRITE. Vercel Hobby caps ISR writes at
+ * 200K/30 days and the dashboard showed 169K used — this was the biggest
+ * remaining driver of that number.
+ *
+ * Returning `[]` (the same pattern already used by `/golpo/[slug]`) keeps
+ * ISR enabled (the route still registers in the prerender manifest) but
+ * renders each page on first request and caches the result. Runtime
+ * entries carry only their implicit path tags, so a publish expires the
+ * DATA cache (new stories appear on the homepage at once) and exactly the
+ * ONE story page we explicitly `revalidatePath` — not the whole catalogue.
+ *
+ * Cost: the very first hit on a cold story page renders on demand. Every
+ * later hit is a cache read, same as before.
+ */
+export function generateStaticParams(): { slug: string }[] {
+  return [];
 }
 
 export async function generateMetadata({

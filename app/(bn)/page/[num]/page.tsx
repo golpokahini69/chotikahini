@@ -12,7 +12,10 @@ import { buildListingJsonLd } from "@/lib/jsonld";
 import { getSiteConfig } from "@/lib/config";
 
 /** Bangla paginated story listing — `/page/:num`. */
-export const revalidate = 3600;
+// ISR budget: was 3600s. Vercel Hobby caps ISR writes at
+// 200K/30d and this route was regenerating far too often. Publishes purge
+// these paths on demand (revalidatePath), so the timer is only a fallback.
+export const revalidate = 21600;
 
 export async function generateMetadata({
   params,

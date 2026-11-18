@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { getAllPostsAsync } from "@/lib/posts";
 
-export const revalidate = 3600;
+// These responses are cached by the CDN (Cache-Control / CDN-Cache-Control
+// headers below), which costs ZERO ISR writes. An `revalidate` export here
+// ALSO created an ISR entry per response and rewrote it on a timer — pure
+// Vercel-budget waste on top of the edge cache that was already serving it.
+export const dynamic = "force-static";
 
 /**
  * Public post index (slug / title / category / tags only — no user data).

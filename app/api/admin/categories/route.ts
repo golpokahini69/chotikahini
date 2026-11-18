@@ -26,10 +26,10 @@ async function refreshCategoryCache() {
   clearPostsCache();
   clearMemoryCache("site-settings");
   invalidateTags([CACHE_TAGS.categories, CACHE_TAGS.siteSettings]);
-  // Category names/counts are rendered into every cached listing, card and
-  // story page. `_N_T_/layout` matches all of them at once; data tags alone
-  // never reach page entries.
-  revalidatePath("/", "layout");
+  // Same budget reasoning as site-settings: purge the homepage (and the
+  // category listing itself), not every page on the site.
+  revalidatePath("/");
+  revalidatePath("/categories");
   await loadSiteSettings();
 }
 

@@ -91,9 +91,11 @@ export async function PATCH(req: Request) {
     }
     invalidateTags([CACHE_TAGS.siteSettings, CACHE_TAGS.categories]);
     // Global config is baked into every rendered page (title, banner,
-    // navigation). `_N_T_/layout` is an implicit tag of every route, so this
-    // purges the whole ISR cache — data tags alone never reach page entries.
-    revalidatePath("/", "layout");
+    // navigation). A layout-wide purge would expire EVERY cached page and
+    // force an ISR write per page on its next visit — the most expensive
+    // thing this route can do. The data tags above already refresh the
+    // config source; the homepage is the surface that must update at once.
+    revalidatePath("/");
     await loadSiteSettings();
     return NextResponse.json({ success: true });
   } catch (e: any) {

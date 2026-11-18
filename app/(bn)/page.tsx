@@ -11,7 +11,10 @@ import { getSiteConfig } from "@/lib/config";
  * The page logic lives in `lib/routes/home.ts` and the markup in
  * `components/pages/HomeView.tsx`.
  */
-export const revalidate = 3600;
+// ISR budget: was 3600s. Vercel Hobby caps ISR writes at
+// 200K/30d and this route was regenerating far too often. Publishes purge
+// these paths on demand (revalidatePath), so the timer is only a fallback.
+export const revalidate = 21600;
 
 export function generateMetadata(): Metadata {
   return homeMetadata("bn");

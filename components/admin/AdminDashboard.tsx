@@ -716,9 +716,9 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
       fetchWelcomeRecipients();
       fetchDeletionRequests();
       fetchContactMessages();
-      fetchAllStoriesForReview();
+      // (queue refreshes on section open / after actions — not on every poll)
       fetchVerifyRequests();
-    }, 30000);
+    }, 120000);
 
     const onVisibility = () => {
       if (document.hidden) {
@@ -734,9 +734,9 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
             fetchWelcomeRecipients();
             fetchDeletionRequests();
             fetchContactMessages();
-            fetchAllStoriesForReview();
+            // (queue refreshes on section open / after actions — not on every poll)
             fetchVerifyRequests();
-          }, 30000);
+          }, 120000);
         }
       }
     };
@@ -801,7 +801,7 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
         setReviewMsg({ type: "success", text: json.message || "অপারেশন সফলভাবে সম্পন্ন হয়েছে!" });
         setPostsList((prev) => prev.filter((p) => (p.fileSlug || p.slug) !== fileSlug));
         fetchAuthors();
-        fetchAllStoriesForReview();
+        // (queue refreshes on section open / after actions — not on every poll)
         fetchStats();
         router.refresh();
         if (viewingAuthor) {
@@ -988,7 +988,7 @@ export default function AdminDashboard({ publishedPosts }: { publishedPosts: Pos
         alert(json.message || `${selectedUids.size}টি গল্প আপডেট হয়েছে।`);
         setSelectedUids(new Set());
         router.refresh();
-        fetchAllStoriesForReview();
+        // (queue refreshes on section open / after actions — not on every poll)
         fetchStats();
       } else {
         alert(json.error || "বাল্ক অ্যাকশন ব্যর্থ হয়েছে।");

@@ -32,34 +32,31 @@ import { revalidatePath } from "next/cache";
  * `.next-build/server/app/*.meta`.
  */
 export function revalidateStoryListingPaths() {
-  // Plain-URL form (matches `_N_T_/<concrete path>`).
+  // ── Vercel ISR-write budget ────────────────────────────────────────────
+  // Every purged entry is an ISR WRITE the next time that page is hit.
+  // Hobby caps writes at 200K/30 days, and the previous version purged the
+  // route PATTERNS for page/[num], categories/[category], tags/[tag],
+  // archive/[year]/[month] and authors/[id] on EVERY publish. One pattern
+  // purge expires EVERY cached instance of that route — hundreds of pages
+  // for a single story going live.
+  //
+  // What still gets purged on publish: the surfaces that must show a new
+  // story immediately (homepage + the main posts listing), the story's own
+  // URLs, and the feeds. The long-tail listings (category/tag/author/
+  // archive/pagination) now refresh on their own timer (6h) and via the
+  // category/tag pages' own on-demand paths when those are the ones being
+  // edited. That is the deliberate trade: a brand-new story appears on the
+  // homepage at once, and in a tag listing at worst a few hours later.
+
+  // Homepage — plain URL + app path (both tag shapes; see the doc above).
   revalidatePath("/");
-  revalidatePath("/posts");
-  revalidatePath("/categories");
-  revalidatePath("/tags");
-  revalidatePath("/archive");
-  revalidatePath("/authors");
-  revalidatePath("/series");
-  revalidatePath("/featured");
-
-  // App-path + "page" form (matches `_N_T_/<app path>/page`).
   revalidatePath("/(bn)", "page");
+
+  // Main listing.
+  revalidatePath("/posts");
   revalidatePath("/(bn)/posts", "page");
-  revalidatePath("/(bn)/categories", "page");
-  revalidatePath("/(bn)/tags", "page");
-  revalidatePath("/(bn)/archive", "page");
-  revalidatePath("/(bn)/authors", "page");
-  revalidatePath("/(bn)/series", "page");
-  revalidatePath("/(bn)/featured", "page");
 
-  // Dynamic listings — only the route-pattern tag covers every instance.
-  revalidatePath("/(bn)/page/[num]", "page");
-  revalidatePath("/(bn)/categories/[category]", "page");
-  revalidatePath("/(bn)/tags/[tag]", "page");
-  revalidatePath("/(bn)/archive/[year]/[month]", "page");
-  revalidatePath("/(bn)/authors/[id]", "page");
-
-  // Derived feeds and the sitemap are built from the same story rows.
+  // Feeds + sitemap: crawler-facing, low volume, must stay current.
   revalidatePath("/rss.xml");
   revalidatePath("/rss-pictures.xml");
   revalidatePath("/sitemap.xml");
