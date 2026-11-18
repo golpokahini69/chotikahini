@@ -52,7 +52,27 @@ import type { PostMeta } from "./posts";
  * start coming back suppressed, raising `DEFAULT_BLUR_RATIO` and bumping
  * this version again is the whole fix.
  */
-export const OG_IMAGE_VERSION = 12;
+/**
+ * v13 — media cards were reported as "OG missing" on many galleries.
+ *
+ * Nothing in the renderer changed here: the card bytes are the same 1200x630
+ * JPEG. The problem is CACHING AT THE CRAWLER. A card URL is
+ * `/api/og/media/<kind>/<id>?v=<fingerprint>`, and every social platform
+ * stores the first response it ever saw for that exact URL. Galleries that
+ * were published while the media card route was still being built (or while
+ * an upstream CDN 403'd the cover) left a 404/blank preview on Facebook,
+ * Telegram, X, WhatsApp and Discord — retrying the same URL never replaces
+ * it, because the URL did not change.
+ *
+ * Bumping the version changes the `?v=` on every media card (galleries AND
+ * videos, since both go through `mediaOgVersion`), so all crawlers fetch a
+ * URL they have never seen and pick the working card up.
+ *
+ * Rule of thumb: bump this whenever an already-shared card must be
+ * re-scraped. Do not bump casually — it invalidates the platform cache for
+ * every item.
+ */
+export const OG_IMAGE_VERSION = 13;
 
 function fingerprint(value: string): string {
   let hash = 2166136261;

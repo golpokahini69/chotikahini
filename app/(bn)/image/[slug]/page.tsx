@@ -16,6 +16,8 @@ import { pictureTagSlug } from "@/lib/picture-tag-utils";
 import { isPictureSectionEnabled } from "@/lib/config";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { PictureGalleryViewer } from "@/components/PictureGalleryViewer";
+import { PostReactions } from "@/components/PostReactions";
+import { CommentSection } from "@/components/comments/CommentSection";
 import { PictureViewTracker } from "@/components/PictureViewTracker";
 import { LiveViewCount } from "@/components/LiveViewCount";
 import { enToBnNumber, formatDateTime } from "@/lib/utils";
@@ -147,6 +149,15 @@ export default async function PicturePublicPage({ params }: PicturesPageProps) {
 
           {/* ---- The gallery itself ---- */}
           <PictureGalleryViewer images={picture.images} title={picture.title} />
+
+          {/* Reactions + comments — same components the story and video
+              pages use, keyed by the synthetic `picture:<id>` slug. The
+              comments API treats that key like `video:<id>`: no story row,
+              only published galleries accept new comments. */}
+          <div className="mt-6 space-y-6">
+            <PostReactions postSlug={`picture:${picture.id}`} />
+            <CommentSection postSlug={`picture:${picture.id}`} />
+          </div>
         </div>
 
         {/* ---------- Sidebar: gallery facts ---------- */}

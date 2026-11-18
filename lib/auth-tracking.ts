@@ -43,6 +43,12 @@ export interface SessionActivity {
   userAgent: string | null;
   /** "logout" | "next_login" | "open" — how this session was closed. */
   closedBy: "logout" | "next_login" | "open";
+  /**
+   * Latest heartbeat for an OPEN session (users.last_seen_at), so the panel
+   * can tell "still here" from "closed the browser three days ago without
+   * logging out". Null when the member has never been seen.
+   */
+  lastSeenAt?: string | null;
 }
 
 function clientIp(req: Request): string | null {
@@ -179,6 +185,30 @@ export async function getMemberSessions(opts?: {
         session.durationSeconds = seconds;
         session.closedBy = "logout";
         openByActor.delete(row.actor_id);
+      }
+    }
+
+    // Open sessions are "never logged out", not "currently here". Attach the
+    // member's last heartbeat so the caller can tell the difference.
+    const openIds = Array.from(
+      new Set(sessions.filter((session) => session.closedBy === "open").map((session) => session.userId)),
+    );
+    if (openIds.length > 0) {
+      try {
+        const { data: seenRows } = await supabase
+          .from("users")
+          .select("id, last_seen_at")
+          .in("id", openIds);
+        const seenById = new Map<string, string | null>();
+        for (const row of (seenRows || []) as Array<{ id: string; last_seen_at: string | null }>) {
+          seenById.set(row.id, row.last_seen_at);
+        }
+        for (const session of sessions) {
+          if (session.closedBy !== "open") continue;
+          session.lastSeenAt = seenById.get(session.userId) ?? null;
+        }
+      } catch {
+        /* last-seen is a bonus signal; never fail the list over it */
       }
     }
 

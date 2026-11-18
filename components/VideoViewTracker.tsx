@@ -47,42 +47,13 @@ export function VideoViewTracker({ videoId, targetId }: Props) {
     if (!el || typeof IntersectionObserver === "undefined") return;
 
     const storageKey = `video:${videoId}`;
-    const sessionKey = `video_view:${videoId}`;
 
-    // Counted in this tab already → don't re-POST, just refresh the label
-    // from the (edge-cached) endpoint so a revisit shows today's number.
-    let countedBefore = false;
-    try {
-      countedBefore = sessionStorage.getItem(sessionKey) !== null;
-    } catch {
-      // sessionStorage blocked: fall through, server de-dupes regardless.
-    }
-
+    // Every visit counts — there is no per-tab/per-day "already counted"
+    // branch any more. The label always shows the exact post-increment total
+    // the server returns, which is also what the admin dashboard sums.
     const remember = (views: number) => {
-      try {
-        sessionStorage.setItem(sessionKey, String(views));
-      } catch {
-        /* best effort */
-      }
       publishViewCount(storageKey, views);
     };
-
-    if (countedBefore) {
-      fetch(`/api/videos/${videoId}/view`, {
-        headers: { Accept: "application/json" },
-        cache: "force-cache",
-      })
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
-          if (data && typeof data.viewCount === "number") {
-            publishViewCount(storageKey, data.viewCount);
-          }
-        })
-        .catch(() => {
-          /* keep the server-rendered number */
-        });
-      return;
-    }
 
     let fired = false;
     let visibleSince: number | null = null;

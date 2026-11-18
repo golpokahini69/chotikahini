@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { buildViewerKey, getCachedCount, isCounted, markCounted, setCachedCount } from "@/lib/view-count";
+import { buildViewerKey, getCachedCount, setCachedCount } from "@/lib/view-count";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +25,9 @@ interface RouteContext {
   params: Promise<{ id: string }>;
 }
 
-const DEDUPE_WINDOW_MS = 24 * 60 * 60 * 1000;
+// No per-viewer window: every visit to the gallery counts (owner's explicit
+// requirement — "কেউ ভিউ করলেই যেন কাউন্ট হয়"). Duplicate mounts are guarded
+// on the client with a per-mount ref.
 const cacheKey = (id: string) => `picture:${id}`;
 
 /** Returns the new count when the write landed, null when it did not. */
@@ -100,30 +102,20 @@ export async function POST(req: Request, { params }: RouteContext) {
 
   try {
     const body = (await req.json().catch(() => ({}))) as { visitorId?: string };
-    const viewerKey = buildViewerKey(req, body?.visitorId);
-    const dedupeKey = `picture:${id}:${viewerKey}`;
-
-    // Already counted for this viewer today → answer from memory, no DB.
-    if (isCounted(dedupeKey)) {
-      return NextResponse.json({
-        counted: false,
-        viewCount: getCachedCount(cacheKey(id)) ?? 0,
-      });
-    }
+    // The viewer key is still sent to the RPC, but unique to this call so the
+    // RPC's unique-key check can never swallow a real visit.
+    const viewerKey = `v:${buildViewerKey(req, body?.visitorId)}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
 
     const supabase = getSupabaseAdmin();
     const next = await incrementInDatabase(supabase, id, viewerKey);
 
     if (next === null) {
-      // Nothing written — leave the viewer unmarked so the next page load
-      // retries instead of swallowing the view.
       return NextResponse.json({
         counted: false,
         viewCount: getCachedCount(cacheKey(id)) ?? 0,
       });
     }
 
-    markCounted(dedupeKey, DEDUPE_WINDOW_MS);
     setCachedCount(cacheKey(id), next);
     return NextResponse.json({ counted: true, viewCount: next });
   } catch (e) {

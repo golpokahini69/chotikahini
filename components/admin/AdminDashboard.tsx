@@ -2459,9 +2459,25 @@ return (
                           </span>
                           <span className="font-bold text-fg text-sm truncate">{session.username}</span>
                           {session.closedBy === "open" ? (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
-                              এখনও অ্যাকটিভ
-                            </span>
+                            (() => {
+                              // "Logged in and never logged out" is not the
+                              // same as "still here" — if the heartbeat is
+                              // older than 15 minutes the tab was abandoned.
+                              const seenMs = session.lastSeenAt ? Date.now() - new Date(session.lastSeenAt).getTime() : null;
+                              const isFresh = seenMs !== null && seenMs < 15 * 60 * 1000;
+                              return (
+                                <span
+                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                    isFresh
+                                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                                      : "bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300"
+                                  }`}
+                                  title={session.lastSeenAt ? `সর্বশেষ সক্রিয়: ${bndSafe(session.lastSeenAt, "datetime")}` : undefined}
+                                >
+                                  {isFresh ? "এখনও অ্যাকটিভ" : "লগআউট ছাড়াই বন্ধ"}
+                                </span>
+                              );
+                            })()
                           ) : null}
                         </div>
                         <div className="flex items-center gap-3 text-[11.5px] text-fg-muted flex-wrap">
@@ -2475,7 +2491,11 @@ return (
                           <span>
                             সময়:{" "}
                             <strong className={session.durationSeconds == null ? "text-emerald-600 dark:text-emerald-400" : "text-fg"}>
-                              {session.durationSeconds == null ? "চলছে…" : formatDurationBn(session.durationSeconds)}
+                              {session.durationSeconds == null
+                                ? session.lastSeenAt
+                                  ? `চলছে · শেষ সক্রিয় ${bndSafe(session.lastSeenAt, "datetime")}`
+                                  : "চলছে…"
+                                : formatDurationBn(session.durationSeconds)}
                             </strong>
                           </span>
                         </div>

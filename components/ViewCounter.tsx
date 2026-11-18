@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Eye } from "lucide-react";
 import { fetchJson } from "@/lib/client-fetch";
 import { getVisitorId } from "@/lib/client-visitor-id";
@@ -26,49 +26,24 @@ import { publishViewCount } from "@/lib/view-count-client";
 export function ViewCounter({ slug }: { slug: string }) {
   const [views, setViews] = useState<number | null>(null);
 
+  // One POST per mounted page visit. The ref stops React StrictMode's
+  // double-invoked effect (dev) and any remount from double counting; the
+  // SERVER no longer de-duplicates per reader, so every real visit counts.
+  const postedRef = useRef(false);
+
   useEffect(() => {
     let isMounted = true;
-    const sessionKey = `post_views_${slug}`;
     const show = (n: number) => {
       if (!isMounted) return;
       setViews(n);
       publishViewCount(`story:${slug}`, n);
     };
 
-    const readStored = (): number | null => {
-      try {
-        const stored = sessionStorage.getItem(sessionKey);
-        if (stored === null) return null;
-        const n = Number(stored);
-        return Number.isFinite(n) ? n : null;
-      } catch {
-        return null;
-      }
-    };
+    if (postedRef.current) return;
+    postedRef.current = true;
 
-    const storedCount = readStored();
-
-    const readCurrent = () =>
-      fetchJson<{ views?: number }>(`/api/views?slug=${encodeURIComponent(slug)}`).then(
-        (data) => {
-          if (typeof data.views === "number") show(data.views);
-          else if (storedCount !== null) show(storedCount);
-        },
-      );
-
-    if (storedCount !== null) {
-      // Counted in this tab already: don't re-POST, but do refresh the
-      // number so a refresh cannot show a stale count.
-      readCurrent().catch(() => {
-        if (storedCount !== null) show(storedCount);
-      });
-      return () => {
-        isMounted = false;
-      };
-    }
-
-    // The POST both records the view and returns the fresh count, so a
-    // successful first view costs exactly one request.
+    // The POST both records the view and returns the authoritative
+    // post-increment total — the number rendered here is never a cached copy.
     fetch("/api/views", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -81,20 +56,15 @@ export function ViewCounter({ slug }: { slug: string }) {
       .then(async (res) => {
         if (!res.ok) throw new Error(String(res.status));
         const data = await res.json();
-        if (typeof data.views === "number") {
-          try {
-            sessionStorage.setItem(sessionKey, String(data.views));
-          } catch {}
-          show(data.views);
-        }
+        if (typeof data.views === "number") show(data.views);
       })
       .catch(() => {
-        // Write path failed: fall back to the cached read (shared across
-        // visitors at the edge) so the label is still correct, and leave the
-        // tab flag unset so the NEXT visit retries the actual count.
-        readCurrent().catch(() => {
-          /* leave the counter hidden rather than showing a wrong number */
-        });
+        // Counting failed: read the stored total instead of inventing one.
+        fetchJson<{ views?: number }>(`/api/views?slug=${encodeURIComponent(slug)}`)
+          .then((data) => {
+            if (typeof data.views === "number") show(data.views);
+          })
+          .catch(() => {});
       });
 
     return () => {

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { buildViewerKey, claimDedupe, getCachedCount, isCounted, releaseDedupe, setCachedCount } from "@/lib/view-count";
+import { getCachedCount, setCachedCount } from "@/lib/view-count";
 
 /**
  * Story view counter.
@@ -15,13 +15,22 @@ import { buildViewerKey, claimDedupe, getCachedCount, isCounted, releaseDedupe, 
  *   3. table-level fallback when the RPC is missing, so an un-run migration
  *      can no longer silently freeze every story counter at its old value.
  *
- * The dedupe probe is deliberately checked BEFORE the write and marked only
- * AFTER the write succeeds: the database has no per-viewer guard here (only
- * video/picture views do), so marking first would swallow views whenever a
- * write failed, and no retry would ever happen.
+ * COUNTING POLICY — one visit, one view, no viewer-level window.
+ *
+ * This used to de-duplicate per reader for 10 minutes. The owner's
+ * requirement is explicit: "কেউ ভিউ করলেই যেন কাউন্ট হয়, একদম এক্সাক্ট" —
+ * every genuine page view increments the counter, and every surface (public
+ * page, listing, admin dashboard) shows the SAME number. Duplicate writes
+ * from a single mount (React StrictMode's double effect, a double-mounted
+ * tracker) are prevented on the CLIENT with a per-mount guard, not by
+ * discarding real visits server-side.
+ *
+ * The counter shown to readers comes from the response of this POST (the
+ * authoritative post-increment value), so the displayed number can never be
+ * a stale cached copy.
  */
 
-const STORY_DEDUPE_MS = 10 * 60 * 1000; // one view per reader per story per 10 min
+const STORY_DEDUPE_MS = 0; // no viewer window: every visit counts
 
 const viewHeaders = {
   "Cache-Control": "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
@@ -118,36 +127,12 @@ export async function POST(req: Request) {
     }
 
     const cleanSlug = String(slug).slice(0, 300);
-    const viewerKey = buildViewerKey(req, visitorId);
-    const dedupeKey = `story:${cleanSlug}:${viewerKey}`;
 
-    // Fast path: already counted for this reader in this window.
-    if (isCounted(dedupeKey)) {
-      return NextResponse.json({
-        success: true,
-        views: getCachedCount(cacheKey(cleanSlug)) ?? 0,
-        incremented: false,
-      });
-    }
-
-    // CLAIM before writing. Story views have no database-side unique key
-    // (unlike video/picture views), so two requests racing — StrictMode's
-    // double-effect, a remount, a duplicated tracker — would both pass the
-    // check above and both increment. The loser of the claim never writes.
-    if (!claimDedupe(dedupeKey, STORY_DEDUPE_MS)) {
-      return NextResponse.json({
-        success: true,
-        views: getCachedCount(cacheKey(cleanSlug)) ?? 0,
-        incremented: false,
-      });
-    }
-
+    // Every call increments. Duplicate mounts are guarded on the client (a
+    // per-mount ref), so a real visit is never dropped here.
     const next = await incrementInDatabase(cleanSlug);
 
     if (next === null) {
-      // Write failed: undo the claim so the next request retries instead of
-      // swallowing the view forever.
-      releaseDedupe(dedupeKey);
       return NextResponse.json({
         success: true,
         views: getCachedCount(cacheKey(cleanSlug)) ?? 0,

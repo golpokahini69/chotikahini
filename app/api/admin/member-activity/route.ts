@@ -62,7 +62,14 @@ export async function GET(req: Request) {
           sessions: sessions.length,
           members: members.length,
           events: totalEvents,
-          activeNow: sessions.filter((s) => s.closedBy === "open").length,
+          // "Active now" = logged in, not logged out, AND a heartbeat inside
+          // the last 15 minutes. A session abandoned days ago is not active.
+          activeNow: sessions.filter(
+            (s) =>
+              s.closedBy === "open" &&
+              s.lastSeenAt != null &&
+              Date.now() - new Date(s.lastSeenAt).getTime() < 15 * 60 * 1000,
+          ).length,
         },
       },
       { headers: { "Cache-Control": "private, max-age=0, must-revalidate" } },

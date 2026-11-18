@@ -103,9 +103,12 @@ export async function GET(req: Request) {
 
     const supabase = getSupabaseAdmin();
 
-    // Videos use the synthetic slug `video:<uuid>` and have no row in
-    // `stories`, so the publication gate below is skipped for them.
-    const isVideoSlug = postSlug.startsWith("video:");
+    // Media pages comment under a synthetic slug that cannot exist in
+    // `stories`: `video:<uuid>` and `picture:<uuid>`. They have no story
+    // row, so the publication gate below is skipped for them.
+    const mediaMatch = /^(video|picture):(.+)$/.exec(postSlug);
+    const isVideoSlug = mediaMatch?.[1] === "video";
+    const isMediaSlug = mediaMatch !== null;
 
     // A published story's comments are the same for every visitor, so the
     // response can be served from the CDN. A pending/draft story may only
@@ -116,7 +119,7 @@ export async function GET(req: Request) {
     // Check if story is published before returning comments to public.
     // The story list is memoised server-side (lib/posts.ts), so this is an
     // in-memory lookup instead of another `stories` query per request.
-    if (!isVideoSlug) {
+    if (!isMediaSlug) {
       const posts = await getAllPostsAsync({ includeFuture: true, includePending: true });
       // Identifier lookup is memoised per posts array (lib/posts.ts), so this
       // is O(1) instead of scanning every story on every comment request.
@@ -139,16 +142,22 @@ export async function GET(req: Request) {
         }
       }
     } else {
-      // Mirror the video API's guard: only published videos are commentable.
-      const { data: video } = await supabase
-        .from("video_posts")
+      // Only PUBLISHED media is commentable. Videos live in `video_posts`,
+      // galleries in `picture_galleries`; both are keyed by uuid.
+      const mediaId = mediaMatch![2];
+      const table = isVideoSlug ? "video_posts" : "picture_galleries";
+      const { data: media } = await supabase
+        .from(table)
         .select("id")
-        .eq("id", postSlug.slice(6))
+        .eq("id", mediaId)
         .eq("status", "published")
         .maybeSingle();
 
-      if (!video) {
-        return NextResponse.json({ error: "ভিডিও পাওয়া যায়নি" }, { status: 404 });
+      if (!media) {
+        return NextResponse.json(
+          { error: isVideoSlug ? "ভিডিও পাওয়া যায়নি" : "গ্যালারি পাওয়া যায়নি" },
+          { status: 404 },
+        );
       }
     }
 
@@ -187,17 +196,18 @@ export async function POST(req: Request) {
     }
 
     const { postSlug: rawPostSlug, content, parentCommentId, isSpoiler } = await req.json();
-    // Video comments live under the synthetic slug `video:<uuid>`, which
-    // safeIdentifier rejects (colon is a PostgREST filter metacharacter).
-    // Strip the prefix before sanitising and re-attach it afterwards so both
-    // stories and videos share one comment implementation.
-    const isVideoSlug = typeof rawPostSlug === "string" && rawPostSlug.startsWith("video:");
-    const sanitised = safeIdentifier(
-      isVideoSlug ? rawPostSlug.slice(6) : rawPostSlug,
-    );
+    // Media comments live under synthetic slugs (`video:<uuid>`,
+    // `picture:<uuid>`), which safeIdentifier rejects (colon is a PostgREST
+    // filter metacharacter). Strip the prefix before sanitising and
+    // re-attach it afterwards so stories and both media kinds share one
+    // comment implementation.
+    const mediaPrefixMatch =
+      typeof rawPostSlug === "string" ? /^(video|picture):(.+)$/.exec(rawPostSlug) : null;
+    const mediaPrefix = mediaPrefixMatch?.[1] || null;
+    const sanitised = safeIdentifier(mediaPrefixMatch ? mediaPrefixMatch[2] : rawPostSlug);
     const postSlug = sanitised
-      ? isVideoSlug
-        ? `video:${sanitised}`
+      ? mediaPrefix
+        ? `${mediaPrefix}:${sanitised}`
         : sanitised
       : "";
 
@@ -214,7 +224,7 @@ export async function POST(req: Request) {
     // Check if story is published before allowing comments. Videos are not
     // rows in `stories`, so the slug filter is skipped entirely for them —
     // it also keeps the colon out of a PostgREST `.or()` filter value.
-    if (!isVideoSlug) {
+    if (!mediaPrefix) {
       const { data: story } = await supabase
         .from("stories")
         .select("status, author_id, published_at")
@@ -235,7 +245,7 @@ export async function POST(req: Request) {
 
     // Resolve post_id from post_metadata for normalized FK. Videos have no
     // post_metadata row, so they always insert with a NULL post_id.
-    const { data: postMeta } = isVideoSlug
+    const { data: postMeta } = mediaPrefix
       ? { data: null as any }
       : await supabase
           .from("post_metadata")
